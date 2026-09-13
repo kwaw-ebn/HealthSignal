@@ -34,7 +34,10 @@ def screen(d: ScreeningRequest) -> Decision:
             priority=d.pregnant or d.age<5
             return Decision("High" if priority else "Moderate","Suspected malaria requiring testing","Perform RDT or microscopy before treatment and assess for danger signs.",.7 if priority else .55,bmi)
         return Decision("Low","No malaria screening trigger recorded","Continue routine assessment; test when fever or clinical suspicion is present.",.15,bmi)
-    triggers=sum([d.cough_two_weeks,d.tb_contact,d.night_sweats,d.unexplained_weight_loss])
-    if d.cough_two_weeks or triggers>=2: return Decision("High","Presumptive TB screening result","Refer for diagnostic investigation using the approved TB testing pathway.",min(.95,.55+triggers*.1),bmi)
-    if triggers==1: return Decision("Moderate","One TB screening risk factor recorded","Complete clinical TB screening and consider diagnostic investigation.",.4,bmi)
-    return Decision("Low","No TB screening trigger recorded","Continue routine screening based on exposure and clinical history.",.15,bmi)
+    if d.disease == "tb":
+        triggers=sum([d.cough_two_weeks,d.tb_contact,d.night_sweats,d.unexplained_weight_loss])
+        if d.cough_two_weeks or triggers>=2: return Decision("High","Presumptive TB screening result","Refer for diagnostic investigation using the approved TB testing pathway.",min(.95,.55+triggers*.1),bmi)
+        if triggers==1: return Decision("Moderate","One TB screening risk factor recorded","Complete clinical TB screening and consider diagnostic investigation.",.4,bmi)
+        return Decision("Low","No TB screening trigger recorded","Continue routine screening based on exposure and clinical history.",.15,bmi)
+    label=d.disease.replace("_"," ").title()
+    return Decision("Moderate",f"{label} assessment recorded",f"Complete the approved {label} assessment and follow the current clinical or public health protocol. This module requires medical review before decision rules are activated.",.4,bmi)
