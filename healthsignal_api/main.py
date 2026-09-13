@@ -152,7 +152,7 @@ def audit_logs(limit:int=Query(100,ge=1,le=500),user:User=Depends(allow("adminis
     rows=db.scalars(select(AuditLog).order_by(AuditLog.created_at.desc()).limit(limit)).all()
     return [{"actor":r.actor,"action":r.action,"target_type":r.target_type,"target_id":r.target_id,"details":r.details,"created_at":r.created_at.isoformat()} for r in rows]
 @app.get("/",include_in_schema=False)
-def frontend(): return FileResponse(STATIC_DIR / "index.html")
+def frontend(): return FileResponse(STATIC_DIR / "index.html",headers={"Cache-Control":"no-cache, no-store, must-revalidate"})
 @app.post("/api/v1/screenings",response_model=ScreeningResult,status_code=201)
 def create_screening(p: ScreeningRequest,user:User=Depends(allow("administrator","clinician","disease_control_officer","field_worker")),db: Session=Depends(get_db)):
     d=screen(p); now=datetime.utcnow(); sid=str(uuid.uuid4())
