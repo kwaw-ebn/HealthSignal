@@ -2,6 +2,7 @@ import uuid
 from datetime import date, datetime
 import gradio as gr
 import pandas as pd
+import spaces
 from sqlalchemy import select
 from healthsignal_api.database import Screening, SessionLocal, init_db
 from healthsignal_api.rules import screen
@@ -9,6 +10,12 @@ from healthsignal_api.schemas import ScreeningRequest
 
 init_db()
 NOTICE="HealthSignal supports screening and surveillance. It does not replace clinical judgement, diagnostic testing or approved Ghana Health Service protocols."
+
+# ZeroGPU Spaces require at least one declared GPU function during startup.
+# HealthSignal itself remains CPU based; this marker is never called by screening workflows.
+@spaces.GPU(duration=1)
+def zerogpu_startup_marker():
+    return True
 
 def code(): return "HS-"+str(uuid.uuid4())[:6].upper()
 def visible(d): return [gr.update(visible=d==x) for x in ["hypertension","diabetes","malaria","tb"]]
