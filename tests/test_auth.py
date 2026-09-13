@@ -1,4 +1,5 @@
 import os
+import secrets
 import tempfile
 
 db_file=tempfile.NamedTemporaryFile(suffix=".db",delete=False)
@@ -6,7 +7,10 @@ db_file.close()
 os.environ["DATABASE_URL"]=f"sqlite:///{db_file.name}"
 os.environ["JWT_SECRET"]="test-secret-that-is-long-enough"
 os.environ["ADMIN_USERNAME"]="test.admin"
-os.environ["ADMIN_PASSWORD"]="AdminPassword123"
+ADMIN_TEST_PASSWORD=secrets.token_urlsafe(18)+"Aa1"
+WORKER_TEST_PASSWORD=secrets.token_urlsafe(18)+"Aa1"
+TEMP_TEST_PASSWORD=secrets.token_urlsafe(18)+"Aa1"
+os.environ["ADMIN_PASSWORD"]=ADMIN_TEST_PASSWORD
 os.environ["ADMIN_NAME"]="Test Administrator"
 
 from fastapi.testclient import TestClient
@@ -15,23 +19,23 @@ from healthsignal_api.main import app
 REGISTRATION={
     "username":"ama.mensah","email":"ama@example.com","full_name":"Ama Mensah",
     "phone":"0240000000","staff_id":"GHS-001","facility":"Duakwa Health Centre",
-    "district":"Agona East","region":"Central","role":"field_worker",
-    "password":"StrongWorker123","terms_accepted":True,
+    "district":"Agona East","region":"Central","role":"field_officer",
+    "password":WORKER_TEST_PASSWORD,"terms_accepted":True,
 }
 
 def admin_headers(client):
-    response=client.post("/api/v1/auth/login",json={"username":"test.admin","password":"AdminPassword123"})
+    response=client.post("/api/v1/auth/login",json={"username":"test.admin","password":ADMIN_TEST_PASSWORD})
     return {"Authorization":f"Bearer {response.json()['access_token']}"}
 
 def test_registration_requires_approval():
     with TestClient(app) as client:
         assert client.post("/api/v1/auth/register",json=REGISTRATION).status_code==201
-        assert client.post("/api/v1/auth/login",json={"username":"ama.mensah","password":"StrongWorker123"}).status_code==403
+        assert client.post("/api/v1/auth/login",json={"username":"ama.mensah","password":WORKER_TEST_PASSWORD}).status_code==403
         headers=admin_headers(client)
         users=client.get("/api/v1/users",headers=headers).json()
         user_id=next(user["id"] for user in users if user["username"]=="ama.mensah")
-        assert client.patch(f"/api/v1/users/{user_id}/status",headers=headers,json={"status":"approved","role":"field_worker"}).status_code==200
-        assert client.post("/api/v1/auth/login",json={"username":"ama.mensah","password":"StrongWorker123"}).status_code==200
+        assert client.patch(f"/api/v1/users/{user_id}/status",headers=headers,json={"status":"approved","role":"field_officer"}).status_code==200
+        assert client.post("/api/v1/auth/login",json={"username":"ama.mensah","password":WORKER_TEST_PASSWORD}).status_code==200
 
 def test_duplicate_registration_is_rejected():
     with TestClient(app) as client:
@@ -42,11 +46,11 @@ def test_admin_can_suspend_and_reset_password():
         headers=admin_headers(client)
         users=client.get("/api/v1/users",headers=headers).json()
         user_id=next(user["id"] for user in users if user["username"]=="ama.mensah")
-        assert client.post(f"/api/v1/users/{user_id}/reset-password",headers=headers,json={"temporary_password":"TemporaryPass123"}).status_code==200
-        login=client.post("/api/v1/auth/login",json={"username":"ama.mensah","password":"TemporaryPass123"})
+        assert client.post(f"/api/v1/users/{user_id}/reset-password",headers=headers,json={"temporary_password":TEMP_TEST_PASSWORD}).status_code==200
+        login=client.post("/api/v1/auth/login",json={"username":"ama.mensah","password":TEMP_TEST_PASSWORD})
         assert login.status_code==200 and login.json()["user"]["password_change_required"] is True
         assert client.patch(f"/api/v1/users/{user_id}/status",headers=headers,json={"status":"suspended"}).status_code==200
-        assert client.post("/api/v1/auth/login",json={"username":"ama.mensah","password":"TemporaryPass123"}).status_code==403
+        assert client.post("/api/v1/auth/login",json={"username":"ama.mensah","password":TEMP_TEST_PASSWORD}).status_code==403
 
 def test_non_admin_cannot_list_users():
     with TestClient(app) as client:
@@ -54,7 +58,7 @@ def test_non_admin_cannot_list_users():
         users=client.get("/api/v1/users",headers=headers).json()
         user_id=next(user["id"] for user in users if user["username"]=="ama.mensah")
         client.patch(f"/api/v1/users/{user_id}/status",headers=headers,json={"status":"approved"})
-        login=client.post("/api/v1/auth/login",json={"username":"ama.mensah","password":"TemporaryPass123"}).json()
+        login=client.post("/api/v1/auth/login",json={"username":"ama.mensah","password":TEMP_TEST_PASSWORD}).json()
         worker_headers={"Authorization":f"Bearer {login['access_token']}"}
         assert client.get("/api/v1/users",headers=worker_headers).status_code==403
 
@@ -70,3 +74,19 @@ def test_relational_encounter_history_and_surveillance():
         summary=client.get("/api/v1/surveillance/summary?days=90",headers=headers)
         assert summary.status_code==200
         assert summary.json()["confirmed"]>=1
+
+def test_flagged_case_enters_clinical_review_and_records_history():
+    with TestClient(app) as client:
+        headers=admin_headers(client)
+        payload={"patient_code":"PT-REVIEW01","visit_date":"2026-09-13","age":42,"sex":"Male","region":"Central","district":"Agona East","community":"Nsaba","facility":"Nsaba Health Centre","disease":"malaria","temperature_c":39.1,"fever_or_history":True,"malaria_test":"Not done","malaria_result":"Not available","case_status":"suspected","completion_status":"incomplete","symptoms":["fever"]}
+        assert client.post("/api/v1/screenings",headers=headers,json=payload).status_code==201
+        reviews=client.get("/api/v1/reviews?status=awaiting_review",headers=headers)
+        assert reviews.status_code==200
+        review=next(x for x in reviews.json() if x["patient_code"]=="PT-REVIEW01")
+        assert "Encounter is incomplete" in review["flag_reasons"]
+        decision={"classification":"inconclusive","recommended_action":"request_laboratory_test","status":"follow_up_required","notes":"Malaria test required before a final classification is recorded.","follow_up_date":"2026-09-15"}
+        updated=client.patch(f"/api/v1/reviews/{review['review_id']}",headers=headers,json=decision)
+        assert updated.status_code==200
+        detail=client.get(f"/api/v1/reviews/{review['review_id']}",headers=headers).json()
+        assert detail["status"]=="follow_up_required"
+        assert any(event["action"]=="clinical_decision_recorded" for event in detail["history"])

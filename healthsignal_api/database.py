@@ -208,6 +208,7 @@ def init_db():
         for name,sql_type in additions.items():
             if name not in columns:
                 conn.execute(text(f"ALTER TABLE users ADD COLUMN {name} {sql_type}"))
+        conn.execute(text("UPDATE users SET role='field_officer' WHERE role='field_worker'"))
     screening_columns={c["name"] for c in inspect(engine).get_columns("screenings")}
     screening_additions={"updated_at":"TIMESTAMP","created_by":"VARCHAR(80)","case_status":"VARCHAR(30) DEFAULT 'suspected'","outcome":"VARCHAR(120)","archived":"BOOLEAN DEFAULT FALSE"}
     with engine.begin() as conn:

@@ -50,13 +50,18 @@ def backfill_review_queue():
             db.add(ReviewEvent(review_id=review_id,actor="system",action="historical_case_flagged",details="; ".join(reasons),created_at=now))
         db.commit()
 
-ROLES={"administrator","clinician","disease_control_officer","data_officer","field_worker"}
+ROLES={"administrator","clinician","nutritionist_dietitian","disease_control_officer","field_officer","data_officer"}
 REQUESTABLE_ROLES=ROLES-{"administrator"}
 STATUSES={"pending","approved","rejected","suspended"}
 REVIEW_CLASSES={"suspected","probable","confirmed","excluded","inconclusive"}
 REVIEW_ACTIONS={"repeat_assessment","request_laboratory_test","refer_to_facility","notify_disease_control","start_follow_up","close_case"}
 REVIEW_STATUSES={"awaiting_review","under_review","follow_up_required","closed"}
 CLINICALLY_REVIEWED_MODULES={"hypertension","diabetes","malaria","tb"}
+ALL_MODULES={"hypertension","diabetes","malaria","tb","maternal_risk","childhood_malnutrition","anaemia_pregnancy","hiv_linkage","cholera_diarrhoea","measles","meningitis","acute_respiratory_infection","hepatitis","mental_health","other_ncd"}
+NUTRITION_MODULES={"childhood_malnutrition","anaemia_pregnancy","hypertension","diabetes","other_ncd"}
+PUBLIC_HEALTH_MODULES={"malaria","tb","hiv_linkage","cholera_diarrhoea","measles","meningitis","acute_respiratory_infection","hepatitis"}
+ROLE_MODULES={"administrator":ALL_MODULES,"clinician":ALL_MODULES,"nutritionist_dietitian":NUTRITION_MODULES,"disease_control_officer":PUBLIC_HEALTH_MODULES,"field_officer":ALL_MODULES,"data_officer":set()}
+ROLE_VIEWS={"administrator":["screening","dashboard","surveillance","records","referrals","reviews","users","account","about"],"clinician":["screening","dashboard","records","referrals","reviews","account","about"],"nutritionist_dietitian":["screening","dashboard","records","referrals","reviews","account","about"],"disease_control_officer":["screening","dashboard","surveillance","records","referrals","reviews","account","about"],"field_officer":["screening","dashboard","records","referrals","reviews","account","about"],"data_officer":["dashboard","surveillance","records","reviews","account","about"]}
 
 def clean(value): return str(value or "").strip()
 def valid_password(value):
@@ -76,7 +81,16 @@ def review_flags(p,result):
     if p.referred: reasons.append("Referral follow up requires review")
     return reasons
 def user_json(user):
-    return {"id":user.id,"username":user.username,"email":user.email,"full_name":user.full_name,"phone":user.phone,"staff_id":user.staff_id,"facility":user.facility,"district":user.district,"region":user.region,"role":user.role,"status":user.status,"active":user.active,"force_password_change":user.force_password_change,"last_login":user.last_login.isoformat() if user.last_login else None,"created_at":user.created_at.isoformat() if user.created_at else None}
+    return {"id":user.id,"username":user.username,"email":user.email,"full_name":user.full_name,"phone":user.phone,"staff_id":user.staff_id,"facility":user.facility,"district":user.district,"region":user.region,"role":user.role,"status":user.status,"active":user.active,"force_password_change":user.force_password_change,"allowed_views":ROLE_VIEWS.get(user.role,["account","about"]),"allowed_modules":sorted(ROLE_MODULES.get(user.role,set())),"last_login":user.last_login.isoformat() if user.last_login else None,"created_at":user.created_at.isoformat() if user.created_at else None}
+
+def require_module_access(user,module):
+    if module not in ROLE_MODULES.get(user.role,set()): raise HTTPException(403,"This screening module is not assigned to your professional role")
+
+def require_review_access(user,row):
+    if user.role in {"administrator","clinician"}: return
+    if user.role=="nutritionist_dietitian" and row.disease in NUTRITION_MODULES: return
+    if user.role=="disease_control_officer" and row.disease in PUBLIC_HEALTH_MODULES: return
+    raise HTTPException(403,"This clinical review is not assigned to your professional role")
 
 @app.post("/api/v1/auth/register",status_code=201)
 def register(payload:dict,db:Session=Depends(get_db)):
@@ -188,8 +202,8 @@ def audit_logs(limit:int=Query(100,ge=1,le=500),user:User=Depends(allow("adminis
 @app.get("/",include_in_schema=False)
 def frontend(): return FileResponse(STATIC_DIR / "index.html",headers={"Cache-Control":"no-cache, no-store, must-revalidate"})
 @app.post("/api/v1/screenings",response_model=ScreeningResult,status_code=201)
-def create_screening(p: ScreeningRequest,user:User=Depends(allow("administrator","clinician","disease_control_officer","field_worker")),db: Session=Depends(get_db)):
-    d=screen(p); now=datetime.utcnow(); sid=str(uuid.uuid4()); eid=str(uuid.uuid4())
+def create_screening(p: ScreeningRequest,user:User=Depends(current_user),db: Session=Depends(get_db)):
+    require_module_access(user,p.disease); d=screen(p); now=datetime.utcnow(); sid=str(uuid.uuid4()); eid=str(uuid.uuid4())
     patient=db.scalar(select(Patient).where(Patient.patient_code==p.patient_code))
     if not patient:
         patient=Patient(patient_code=p.patient_code,sex=p.sex,approximate_age=p.age,home_community=p.community,district=p.district,region=p.region,created_by=user.username)
@@ -213,7 +227,9 @@ def create_screening(p: ScreeningRequest,user:User=Depends(allow("administrator"
 @app.get("/api/v1/reviews")
 def list_reviews(status:str|None=None,priority:str|None=None,disease:str|None=None,district:str|None=None,user:User=Depends(current_user),db:Session=Depends(get_db)):
     stmt=select(ReviewCase).order_by(ReviewCase.created_at.desc()).limit(500)
-    if user.role=="field_worker": stmt=stmt.where(ReviewCase.created_by==user.username)
+    if user.role=="field_officer": stmt=stmt.where(ReviewCase.created_by==user.username)
+    elif user.role=="nutritionist_dietitian": stmt=stmt.where(ReviewCase.disease.in_(NUTRITION_MODULES))
+    elif user.role=="disease_control_officer": stmt=stmt.where(ReviewCase.disease.in_(PUBLIC_HEALTH_MODULES))
     if status: stmt=stmt.where(ReviewCase.status==status)
     if priority: stmt=stmt.where(ReviewCase.priority==priority)
     if disease: stmt=stmt.where(ReviewCase.disease==disease)
@@ -224,14 +240,16 @@ def list_reviews(status:str|None=None,priority:str|None=None,disease:str|None=No
 @app.get("/api/v1/reviews/{review_id}")
 def get_review(review_id:str,user:User=Depends(current_user),db:Session=Depends(get_db)):
     row=db.scalar(select(ReviewCase).where(ReviewCase.review_id==review_id))
-    if not row or (user.role=="field_worker" and row.created_by!=user.username): raise HTTPException(404,"Review case not found")
+    if not row or (user.role=="field_officer" and row.created_by!=user.username): raise HTTPException(404,"Review case not found")
+    if user.role in {"nutritionist_dietitian","disease_control_officer"}: require_review_access(user,row)
     events=db.scalars(select(ReviewEvent).where(ReviewEvent.review_id==review_id).order_by(ReviewEvent.created_at.desc())).all()
     return review_json(row,db.scalar(select(Screening).where(Screening.screening_id==row.screening_id)),db.scalar(select(Encounter).where(Encounter.encounter_id==row.encounter_id)),events)
 
 @app.patch("/api/v1/reviews/{review_id}")
-def decide_review(review_id:str,payload:dict,user:User=Depends(allow("administrator","clinician","disease_control_officer")),db:Session=Depends(get_db)):
+def decide_review(review_id:str,payload:dict,user:User=Depends(allow("administrator","clinician","nutritionist_dietitian","disease_control_officer")),db:Session=Depends(get_db)):
     row=db.scalar(select(ReviewCase).where(ReviewCase.review_id==review_id))
     if not row: raise HTTPException(404,"Review case not found")
+    require_review_access(user,row)
     classification=clean(payload.get("classification")); action=clean(payload.get("recommended_action")); status=clean(payload.get("status"))
     if classification not in REVIEW_CLASSES: raise HTTPException(422,"Select a valid reviewer classification")
     if action not in REVIEW_ACTIONS: raise HTTPException(422,"Select a valid recommended action")
@@ -257,15 +275,18 @@ def review_data_quality(review_id:str,payload:dict,user:User=Depends(allow("admi
 @app.get("/api/v1/screenings")
 def list_screenings(limit:int=Query(100,ge=1,le=1000),patient_code:str|None=None,user:User=Depends(current_user),db:Session=Depends(get_db)):
     stmt=select(Screening).where(Screening.archived.is_(False)).order_by(Screening.created_at.desc()).limit(limit)
+    if user.role=="field_officer": stmt=stmt.where(Screening.created_by==user.username)
     if patient_code: stmt=stmt.where(Screening.patient_code==patient_code)
     return [{"screening_id":r.screening_id,"patient_code":r.patient_code,"visit_date":r.visit_date,"district":r.district,"community":r.community,"disease":r.disease,"risk_level":r.risk_level,"classification":r.classification,"recommendation":r.recommendation,"referred":r.referred,"case_status":r.case_status,"outcome":r.outcome} for r in db.scalars(stmt).all()]
 @app.get("/api/v1/dashboard")
 def dashboard(days:int=Query(30,ge=1,le=365),user:User=Depends(current_user),db:Session=Depends(get_db)):
-    rows=db.execute(select(Screening.disease,Screening.risk_level,func.count()).where(Screening.created_at>=datetime.utcnow()-timedelta(days=days)).group_by(Screening.disease,Screening.risk_level)).all()
+    stmt=select(Screening.disease,Screening.risk_level,func.count()).where(Screening.created_at>=datetime.utcnow()-timedelta(days=days))
+    if user.role=="field_officer": stmt=stmt.where(Screening.created_by==user.username)
+    rows=db.execute(stmt.group_by(Screening.disease,Screening.risk_level)).all()
     return {"period_days":days,"total_screenings":sum(x[2] for x in rows),"high_or_urgent":sum(x[2] for x in rows if x[1] in ("High","Urgent")),"breakdown":[{"disease":d,"risk_level":r,"count":c} for d,r,c in rows],"note":"Counts are screening signals, not confirmed disease incidence."}
 
 @app.post("/api/v1/referrals",status_code=201)
-def create_referral(payload:dict,user:User=Depends(allow("administrator","clinician","disease_control_officer","field_worker")),db:Session=Depends(get_db)):
+def create_referral(payload:dict,user:User=Depends(allow("administrator","clinician","nutritionist_dietitian","disease_control_officer","field_officer")),db:Session=Depends(get_db)):
     screening_id=str(payload.get("screening_id","")); screening=db.scalar(select(Screening).where(Screening.screening_id==screening_id))
     if not screening: raise HTTPException(404,"Screening record not found")
     referral=Referral(referral_id=str(uuid.uuid4()),screening_id=screening_id,patient_code=screening.patient_code,destination=str(payload.get("destination","")).strip(),reason=str(payload.get("reason",screening.recommendation)),status="Pending",due_date=payload.get("due_date"),created_by=user.username)
@@ -274,11 +295,13 @@ def create_referral(payload:dict,user:User=Depends(allow("administrator","clinic
 
 @app.get("/api/v1/referrals")
 def list_referrals(user:User=Depends(current_user),db:Session=Depends(get_db)):
-    rows=db.scalars(select(Referral).order_by(Referral.created_at.desc()).limit(500)).all()
+    stmt=select(Referral).order_by(Referral.created_at.desc()).limit(500)
+    if user.role=="field_officer": stmt=stmt.where(Referral.created_by==user.username)
+    rows=db.scalars(stmt).all()
     return [{"referral_id":r.referral_id,"screening_id":r.screening_id,"patient_code":r.patient_code,"destination":r.destination,"reason":r.reason,"status":r.status,"due_date":r.due_date,"created_by":r.created_by} for r in rows]
 
 @app.patch("/api/v1/referrals/{referral_id}")
-def update_referral(referral_id:str,payload:dict,user:User=Depends(allow("administrator","clinician","disease_control_officer")),db:Session=Depends(get_db)):
+def update_referral(referral_id:str,payload:dict,user:User=Depends(allow("administrator","clinician","nutritionist_dietitian","disease_control_officer")),db:Session=Depends(get_db)):
     referral=db.scalar(select(Referral).where(Referral.referral_id==referral_id))
     if not referral: raise HTTPException(404,"Referral not found")
     status=payload.get("status"); allowed={"Pending","Contacted","Completed","Unable to reach"}
@@ -290,13 +313,18 @@ def patient_history(patient_code:str,user:User=Depends(current_user),db:Session=
     patient=db.scalar(select(Patient).where(Patient.patient_code==patient_code,Patient.archived.is_(False)))
     if not patient: raise HTTPException(404,"Patient code not found")
     encounters=db.scalars(select(Encounter).where(Encounter.patient_code==patient_code,Encounter.archived.is_(False)).order_by(Encounter.visit_date.desc())).all()
+    if user.role=="field_officer": encounters=[e for e in encounters if e.created_by==user.username]
+    if not encounters and user.role=="field_officer": raise HTTPException(404,"Patient code not found in your submitted records")
+    allowed_encounters={e.encounter_id for e in encounters}
     labs=db.scalars(select(LaboratoryTest).where(LaboratoryTest.patient_code==patient_code).order_by(LaboratoryTest.tested_at.desc())).all()
+    if user.role=="field_officer": labs=[x for x in labs if x.encounter_id in allowed_encounters]
     return {"patient":{"patient_code":patient.patient_code,"sex":patient.sex,"age":patient.approximate_age,"community":patient.home_community,"district":patient.district,"region":patient.region},"encounters":[{"encounter_id":e.encounter_id,"screening_id":e.screening_id,"visit_date":e.visit_date,"facility":e.facility,"community":e.community,"district":e.district,"temperature_c":e.temperature_c,"pulse":e.pulse,"respiratory_rate":e.respiratory_rate,"oxygen_saturation":e.oxygen_saturation,"blood_pressure":f"{e.systolic}/{e.diastolic}" if e.systolic and e.diastolic else None,"weight_kg":e.weight_kg,"height_cm":e.height_cm,"bmi":e.bmi,"pregnant":e.pregnant,"symptoms":json.loads(e.symptoms_json or "[]"),"notes":e.notes,"outcome":e.outcome,"follow_up_date":e.follow_up_date,"completion_status":e.completion_status} for e in encounters],"laboratory_tests":[{"test_name":x.test_name,"result":x.result,"unit":x.result_unit,"tested_at":x.tested_at.isoformat()} for x in labs]}
 
 @app.patch("/api/v1/encounters/{encounter_id}")
-def update_encounter(encounter_id:str,payload:dict,user:User=Depends(allow("administrator","clinician","data_officer","field_worker")),db:Session=Depends(get_db)):
+def update_encounter(encounter_id:str,payload:dict,user:User=Depends(allow("administrator","clinician","nutritionist_dietitian","data_officer","field_officer")),db:Session=Depends(get_db)):
     encounter=db.scalar(select(Encounter).where(Encounter.encounter_id==encounter_id,Encounter.archived.is_(False)))
     if not encounter: raise HTTPException(404,"Encounter not found")
+    if user.role=="field_officer" and encounter.created_by!=user.username: raise HTTPException(403,"You can update only records you submitted")
     allowed_fields={"facility","community","district","region","temperature_c","pulse","respiratory_rate","oxygen_saturation","weight_kg","height_cm","pregnant","notes","outcome","follow_up_date","completion_status"}
     for field,value in payload.items():
         if field in allowed_fields: setattr(encounter,field,value)
@@ -315,9 +343,10 @@ def archive_encounter(encounter_id:str,user:User=Depends(allow("administrator","
     audit(db,user.username,"encounter_archived","encounter",encounter_id); db.commit(); return {"message":"Record archived"}
 
 @app.post("/api/v1/encounters/{encounter_id}/attachments",status_code=201)
-def add_attachment(encounter_id:str,payload:dict,user:User=Depends(allow("administrator","clinician","field_worker")),db:Session=Depends(get_db)):
+def add_attachment(encounter_id:str,payload:dict,user:User=Depends(allow("administrator","clinician","nutritionist_dietitian","field_officer")),db:Session=Depends(get_db)):
     encounter=db.scalar(select(Encounter).where(Encounter.encounter_id==encounter_id,Encounter.archived.is_(False)))
     if not encounter: raise HTTPException(404,"Encounter not found")
+    if user.role=="field_officer" and encounter.created_by!=user.username: raise HTTPException(403,"You can upload only to records you submitted")
     if payload.get("consent_confirmed") is not True: raise HTTPException(422,"Consent confirmation is required")
     content_type=clean(payload.get("content_type")); encoded=str(payload.get("data_base64") or "")
     if content_type not in {"image/jpeg","image/png","application/pdf"}: raise HTTPException(422,"Only JPG, PNG or PDF files are supported")
