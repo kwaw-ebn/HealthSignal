@@ -3,8 +3,10 @@ title: HealthSignal
 emoji: 🩺
 colorFrom: teal
 colorTo: green
-sdk: docker
-app_port: 7860
+sdk: gradio
+sdk_version: 5.49.1
+app_file: app.py
+pinned: false
 ---
 
 # HealthSignal
@@ -14,7 +16,7 @@ A Ghana focused field screening, early warning and public health decision suppor
 ## Current capabilities
 
 - Responsive frontend for mobile, tablet and laptop
-- FastAPI backend and interactive API documentation at `/docs`
+- Python screening and data backend hosted with the interface
 - Hypertension, diabetes, malaria and TB screening workflows
 - Automatic BMI calculation
 - Transparent priority classification and referral recommendations
@@ -25,7 +27,7 @@ A Ghana focused field screening, early warning and public health decision suppor
 
 ```bash
 pip install -r requirements.txt
-uvicorn app:app --reload --port 7860
+python app.py
 ```
 
 Open `http://localhost:7860`.
