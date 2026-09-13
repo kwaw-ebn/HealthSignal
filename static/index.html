@@ -20,6 +20,7 @@
   <aside class="sidebar">
     <a class="brand" href="#"><img src="/static/logo.jpg" alt="HealthSignal logo"><span><b>HealthSignal</b><small>Public Health Intelligence</small></span></a>
     <nav>
+      <button id="careNetworkNav" class="nav" data-view="care-network">✚ <span>Care Network</span></button>
       <button id="screeningNav" class="nav active" data-view="screening">⊕ <span>Field Screening</span></button>
       <button class="nav" data-view="dashboard">▦ <span>Dashboard</span></button>
       <button class="nav" data-view="surveillance">⌁ <span>Surveillance</span></button>
@@ -36,6 +37,36 @@
   <main>
     <div class="session-bar" aria-label="Signed-in account controls"><div><span>Signed in as</span><strong id="topSignedInUser">Authorized user</strong></div><button id="topLogout" class="session-logout" type="button" aria-label="Sign out of HealthSignal">Sign out</button></div>
     <section class="hero"><div><span class="eyebrow">GHANA FOCUSED DIGITAL HEALTH</span><h1>From field data to an earlier health signal.</h1><p>Screen priority conditions, record community signals and support timely public health action.</p></div><div class="status"><i></i><span><b id="connectionStatus">System online</b><small id="syncStatus">All records synchronized</small></span></div></section>
+
+    <section id="care-network" class="view">
+      <div class="care-hero"><div><span class="eyebrow">HEALTHSIGNAL CARE NETWORK</span><h2>Connected hospital operations and continuity of care</h2><p>One patient journey across records, OPD, consultation, laboratory, pharmacy and secure inter facility referral.</p></div><span class="mvp-badge">Stakeholder MVP · synthetic data only</span></div>
+      <div class="care-switcher" role="tablist">
+        <button class="care-tab active" data-care-panel="careOverview">Overview</button>
+        <button class="care-tab" data-care-panel="careRegistration">Records & OPD</button>
+        <button class="care-tab" data-care-panel="careClinical">Clinical workflow</button>
+        <button class="care-tab" data-care-panel="careReferral">Referral network</button>
+      </div>
+      <div id="careOverview" class="care-panel active">
+        <div class="metrics care-metrics"><div class="metric"><span>Active care episodes</span><b id="careActive">0</b></div><div class="metric"><span>Incoming referrals</span><b id="careIncoming">0</b></div><div class="metric"><span>Open referrals</span><b id="careOpenReferrals">0</b></div></div>
+        <div class="care-grid"><div class="card"><div class="section-title"><div><h3>Department queues</h3><p>Patients waiting at each service point.</p></div><button id="refreshCare" class="secondary">Refresh</button></div><div id="departmentQueues" class="department-grid"></div></div><div class="card"><h3>Recent patient journeys</h3><div id="recentEpisodes" class="journey-list"></div></div></div>
+      </div>
+      <div id="careRegistration" class="care-panel">
+        <div class="care-grid"><form id="episodeForm" class="card"><span class="step-number">01</span><h3>Register patient visit</h3><p class="muted">Use an existing HealthSignal ID or leave it blank to generate one.</p><label>HealthSignal patient ID<input id="carePatientCode" placeholder="Leave blank to generate"></label><div class="grid two"><label>Age *<input id="careAge" type="number" min="0" max="120" required></label><label>Sex *<select id="careSex"><option>Female</option><option>Male</option><option>Other</option><option>Not recorded</option></select></label><label>Community<input id="careCommunity"></label><label>Visit type<select id="careVisitType"><option>OPD</option><option>Emergency</option><option>RCH</option><option>Follow up</option></select></label></div><label>Chief complaint *<textarea id="careComplaint" required placeholder="Reason for visit"></textarea></label><button class="primary" type="submit">Register and send to OPD</button><div id="episodeResult" class="form-message"></div></form>
+        <form id="triageForm" class="card"><span class="step-number">02</span><h3>OPD triage</h3><label>Care episode *<select id="triageEpisode" required></select></label><div class="grid two"><label>Temperature °C<input id="triageTemp" type="number" step=".1"></label><label>Pulse /min<input id="triagePulse" type="number"></label><label>Respiratory rate<input id="triageResp" type="number"></label><label>SpO₂ %<input id="triageSpo2" type="number" step=".1"></label><label>Systolic BP<input id="triageSys" type="number"></label><label>Diastolic BP<input id="triageDia" type="number"></label><label>Weight kg<input id="triageWeight" type="number" step=".1"></label><label>Height cm<input id="triageHeight" type="number" step=".1"></label></div><label>Triage note<textarea id="triageNotes"></textarea></label><button class="primary" type="submit">Save and send to consultation</button></form></div>
+      </div>
+      <div id="careClinical" class="care-panel">
+        <div class="workflow-banner"><b>Clinical workflow</b><span>Consultation → Laboratory → Pharmacy → Completion</span></div>
+        <div class="care-grid three"><form id="consultForm" class="card"><span class="department-tag">Consulting Room</span><label>Care episode<select id="consultEpisode" required></select></label><label>Assessment<textarea id="consultAssessment" required></textarea></label><label>Care plan<textarea id="consultPlan" required></textarea></label><label>Allergies<input id="consultAllergies" placeholder="None known or details"></label><label>Next service<select id="consultDisposition"><option>Laboratory</option><option>Pharmacy</option><option>RCH</option><option>Theatre</option><option>Completed</option></select></label><button class="primary" type="submit">Save consultation</button></form>
+        <form id="careLabForm" class="card"><span class="department-tag">Laboratory</span><label>Care episode<select id="labEpisode" required></select></label><label>Test name<input id="careLabName" required></label><label>Result<input id="careLabResult" required></label><label>Unit<input id="careLabUnit"></label><button class="primary" type="submit">Release result</button></form>
+        <form id="medicationForm" class="card"><span class="department-tag">Pharmacy</span><label>Care episode<select id="medEpisode" required></select></label><label>Medicine<input id="medicineName" required></label><label>Dose and instructions<textarea id="medicineInstructions" required></textarea></label><button class="primary" type="submit">Send prescription</button><div id="medicationQueue" class="compact-list"></div></form></div>
+      </div>
+      <div id="careReferral" class="care-panel">
+        <div class="privacy-banner"><b>Controlled continuity of care</b><span>A patient ID alone cannot open another facility's record. The receiving team also needs the time limited referral code, an authorized account and a documented access reason.</span></div>
+        <div class="care-grid"><form id="networkReferralForm" class="card"><span class="step-number">A</span><h3>Send referral</h3><label>Care episode<select id="referralEpisode" required></select></label><label>Receiving facility<input id="destinationFacility" list="facilityOptions" required></label><datalist id="facilityOptions"></datalist><label>Reason<textarea id="networkReferralReason" required></textarea></label><label>Clinical handover summary<textarea id="clinicalSummary" required minlength="10"></textarea></label><label>Urgency<select id="referralUrgency"><option value="routine">Routine</option><option value="urgent">Urgent</option><option value="emergency">Emergency</option></select></label><label class="consent"><input id="referralConsent" type="checkbox" required> Consent or approved lawful basis confirmed</label><button class="primary" type="submit">Create secure referral</button><div id="referralCodeResult"></div></form>
+        <form id="accessReferralForm" class="card"><span class="step-number">B</span><h3>Receive referred patient</h3><label>HealthSignal patient ID<input id="accessPatientCode" required></label><label>Referral access code<input id="accessReferralCode" required maxlength="12"></label><label>Reason for access<textarea id="accessReason" required placeholder="e.g. Patient arrived for referred care"></textarea></label><button class="primary" type="submit">Verify and open handover</button><div id="sharedCareRecord"></div></form></div>
+        <div class="card"><div class="section-title"><div><h3>Referral coordination board</h3><p>Source and receiving facilities share referral status and completion feedback.</p></div><button id="refreshNetworkReferrals" class="secondary">Refresh</button></div><div id="networkReferralCards" class="referral-board"></div></div>
+      </div>
+    </section>
 
     <section id="screening" class="view active-view">
       <div class="section-title"><div><h2>New field screening</h2><p>Use a non identifying patient code. Required fields are marked.</p></div><span class="secure">Privacy first</span></div>
@@ -72,5 +103,5 @@
     <section id="about" class="view"><div class="card prose"><div class="about-company"><img src="/static/ek-synergy.jpeg" alt="EK Synergy Ltd — Driving Innovation Forward"><div><span class="eyebrow">AN EK SYNERGY LTD INNOVATION</span><h2>Public health intelligence designed for field realities</h2><p class="company-motto">Driving Innovation Forward</p></div></div><p>HealthSignal is a Ghana focused screening and surveillance platform created by Ebenezer Kwaw. It combines structured field capture, transparent decision support and aggregate public health signals.</p><div class="notice"><b>Clinical safety notice</b><p>This development version supports screening and surveillance. It does not diagnose disease or replace clinical judgement, diagnostic testing or approved Ghana Health Service protocols.</p></div></div></section>
   </main>
   <div id="reviewModal" class="review-modal hidden" role="dialog" aria-modal="true" aria-labelledby="reviewModalTitle"><div class="review-dialog"><button id="closeReview" class="modal-close" type="button" aria-label="Close">×</button><div id="reviewDetail"></div></div></div>
-  <div id="toast" role="status"></div><script src="/static/app.js?v=20260913-7"></script>
+  <div id="toast" role="status"></div><script src="/static/app.js?v=20260913-8"></script>
 </body></html>

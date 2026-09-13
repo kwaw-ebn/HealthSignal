@@ -11,12 +11,14 @@ from .database import Attachment, AuditLog, Encounter, LaboratoryTest, Patient, 
 from .auth import allow, authenticated_user, current_user, hash_password, token_for, verify_password
 from .rules import screen
 from .schemas import ScreeningRequest, ScreeningResult
+from .care_network import router as care_network_router
 
 DISCLAIMER="HealthSignal supports screening and surveillance. It does not replace clinical judgement, diagnostic testing, or Ghana Health Service protocols."
 app=FastAPI(title="HealthSignal API",version="1.0.0",description="Field screening and public health surveillance API")
 app.add_middleware(CORSMiddleware,allow_origins=[x.strip() for x in os.getenv("CORS_ORIGINS","http://localhost:8501").split(",")],allow_methods=["*"],allow_headers=["*"])
 STATIC_DIR=Path(__file__).resolve().parent.parent / "static"
 app.mount("/static",StaticFiles(directory=STATIC_DIR),name="static")
+app.include_router(care_network_router)
 @app.on_event("startup")
 def startup(): init_db()
 @app.get("/health")
@@ -61,7 +63,7 @@ ALL_MODULES={"hypertension","diabetes","malaria","tb","maternal_risk","childhood
 NUTRITION_MODULES={"childhood_malnutrition","anaemia_pregnancy","hypertension","diabetes","other_ncd"}
 PUBLIC_HEALTH_MODULES={"malaria","tb","hiv_linkage","cholera_diarrhoea","measles","meningitis","acute_respiratory_infection","hepatitis"}
 ROLE_MODULES={"administrator":ALL_MODULES,"clinician":ALL_MODULES,"nutritionist_dietitian":NUTRITION_MODULES,"disease_control_officer":PUBLIC_HEALTH_MODULES,"field_officer":ALL_MODULES,"data_officer":set()}
-ROLE_VIEWS={"administrator":["screening","dashboard","surveillance","records","referrals","reviews","users","account","about"],"clinician":["screening","dashboard","records","referrals","reviews","account","about"],"nutritionist_dietitian":["screening","dashboard","records","referrals","reviews","account","about"],"disease_control_officer":["screening","dashboard","surveillance","records","referrals","reviews","account","about"],"field_officer":["screening","dashboard","records","referrals","reviews","account","about"],"data_officer":["dashboard","surveillance","records","reviews","account","about"]}
+ROLE_VIEWS={"administrator":["care-network","screening","dashboard","surveillance","records","referrals","reviews","users","account","about"],"clinician":["care-network","screening","dashboard","records","referrals","reviews","account","about"],"nutritionist_dietitian":["care-network","screening","dashboard","records","referrals","reviews","account","about"],"disease_control_officer":["screening","dashboard","surveillance","records","referrals","reviews","account","about"],"field_officer":["care-network","screening","dashboard","records","referrals","reviews","account","about"],"data_officer":["care-network","dashboard","surveillance","records","reviews","account","about"]}
 
 def clean(value): return str(value or "").strip()
 def valid_password(value):

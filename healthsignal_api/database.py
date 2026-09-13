@@ -191,6 +191,94 @@ class ReviewEvent(Base):
     details: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
+class Facility(Base):
+    __tablename__ = "facilities"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    facility_id: Mapped[str] = mapped_column(String(36), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(160), unique=True, index=True)
+    facility_type: Mapped[str] = mapped_column(String(60), default="Hospital")
+    district: Mapped[str] = mapped_column(String(120), index=True)
+    region: Mapped[str] = mapped_column(String(120), index=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[str] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+class CareEpisode(Base):
+    __tablename__ = "care_episodes"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    episode_id: Mapped[str] = mapped_column(String(36), unique=True, index=True)
+    patient_code: Mapped[str] = mapped_column(String(64), index=True)
+    facility: Mapped[str] = mapped_column(String(160), index=True)
+    visit_date: Mapped[str] = mapped_column(String(10), index=True)
+    visit_type: Mapped[str] = mapped_column(String(40), default="OPD")
+    status: Mapped[str] = mapped_column(String(30), default="registered", index=True)
+    chief_complaint: Mapped[str] = mapped_column(Text, default="")
+    assigned_department: Mapped[str] = mapped_column(String(60), default="OPD", index=True)
+    created_by: Mapped[str] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+class CareEvent(Base):
+    __tablename__ = "care_events"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    event_id: Mapped[str] = mapped_column(String(36), unique=True, index=True)
+    episode_id: Mapped[str] = mapped_column(String(36), index=True)
+    patient_code: Mapped[str] = mapped_column(String(64), index=True)
+    facility: Mapped[str] = mapped_column(String(160), index=True)
+    department: Mapped[str] = mapped_column(String(60), index=True)
+    event_type: Mapped[str] = mapped_column(String(60), index=True)
+    summary: Mapped[str] = mapped_column(Text)
+    clinical_data_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_by: Mapped[str] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+class MedicationOrder(Base):
+    __tablename__ = "medication_orders"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    order_id: Mapped[str] = mapped_column(String(36), unique=True, index=True)
+    episode_id: Mapped[str] = mapped_column(String(36), index=True)
+    patient_code: Mapped[str] = mapped_column(String(64), index=True)
+    facility: Mapped[str] = mapped_column(String(160), index=True)
+    medicine: Mapped[str] = mapped_column(String(160))
+    instructions: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(30), default="prescribed", index=True)
+    prescribed_by: Mapped[str] = mapped_column(String(80))
+    dispensed_by: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    dispensed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+class NetworkReferral(Base):
+    __tablename__ = "network_referrals"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    referral_id: Mapped[str] = mapped_column(String(36), unique=True, index=True)
+    episode_id: Mapped[str] = mapped_column(String(36), index=True)
+    patient_code: Mapped[str] = mapped_column(String(64), index=True)
+    source_facility: Mapped[str] = mapped_column(String(160), index=True)
+    destination_facility: Mapped[str] = mapped_column(String(160), index=True)
+    access_code_hash: Mapped[str] = mapped_column(String(64))
+    reason: Mapped[str] = mapped_column(Text)
+    urgency: Mapped[str] = mapped_column(String(20), default="routine", index=True)
+    clinical_summary: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(30), default="sent", index=True)
+    consent_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
+    accepted_by: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    feedback: Mapped[str | None] = mapped_column(Text, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    created_by: Mapped[str] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+class NetworkReferralEvent(Base):
+    __tablename__ = "network_referral_events"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    referral_id: Mapped[str] = mapped_column(String(36), index=True)
+    actor: Mapped[str] = mapped_column(String(80), index=True)
+    facility: Mapped[str] = mapped_column(String(160))
+    action: Mapped[str] = mapped_column(String(50))
+    details: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
 def init_db():
     Base.metadata.create_all(bind=engine)
     # create_all does not add columns to an existing table. This small, additive

@@ -90,3 +90,39 @@ def test_flagged_case_enters_clinical_review_and_records_history():
         detail=client.get(f"/api/v1/reviews/{review['review_id']}",headers=headers).json()
         assert detail["status"]=="follow_up_required"
         assert any(event["action"]=="clinical_decision_recorded" for event in detail["history"])
+
+def test_care_network_patient_journey_and_controlled_referral_access():
+    with TestClient(app) as client:
+        source_headers=admin_headers(client)
+        episode=client.post("/api/v1/care-network/episodes",headers=source_headers,json={"age":29,"sex":"Female","community":"Duakwa","visit_type":"OPD","chief_complaint":"Fever and weakness"})
+        assert episode.status_code==201
+        episode_data=episode.json(); episode_id=episode_data["episode_id"]; patient_code=episode_data["patient_code"]
+        triage=client.post(f"/api/v1/care-network/episodes/{episode_id}/triage",headers=source_headers,json={"temperature_c":38.2,"pulse":92,"systolic":118,"diastolic":76,"weight_kg":62,"height_cm":165})
+        assert triage.status_code==201 and triage.json()["bmi"]==22.8
+        consultation=client.post(f"/api/v1/care-network/episodes/{episode_id}/consultation",headers=source_headers,json={"assessment":"Fever requiring malaria test","plan":"Request RDT and review result","allergies":"None known","disposition":"Laboratory"})
+        assert consultation.status_code==201
+        assert client.post(f"/api/v1/care-network/episodes/{episode_id}/laboratory",headers=source_headers,json={"test_name":"Malaria RDT","result":"Negative","next_department":"Consulting Room"}).status_code==201
+        referral=client.post("/api/v1/care-network/referrals",headers=source_headers,json={"episode_id":episode_id,"destination_facility":"Nsaba Health Centre","reason":"Further clinical assessment","clinical_summary":"Fever assessed, malaria RDT negative; continued evaluation requested.","urgency":"urgent","consent_confirmed":True})
+        assert referral.status_code==201
+        access_code=referral.json()["access_code"]
+
+        receiver_password=secrets.token_urlsafe(18)+"Aa1"
+        receiver={"username":"receiver.clinician","email":"receiver@example.com","full_name":"Receiving Clinician","phone":"0240000001","staff_id":"GHS-002","facility":"Nsaba Health Centre","district":"Agona East","region":"Central","role":"clinician","password":receiver_password,"terms_accepted":True}
+        assert client.post("/api/v1/auth/register",json=receiver).status_code==201
+        users=client.get("/api/v1/users",headers=source_headers).json(); receiver_id=next(u["id"] for u in users if u["username"]=="receiver.clinician")
+        assert client.patch(f"/api/v1/users/{receiver_id}/status",headers=source_headers,json={"status":"approved","role":"clinician"}).status_code==200
+        token=client.post("/api/v1/auth/login",json={"username":"receiver.clinician","password":receiver_password}).json()["access_token"]
+        receiver_headers={"Authorization":f"Bearer {token}"}
+
+        denied=client.post("/api/v1/care-network/referrals/access",headers=receiver_headers,json={"patient_code":patient_code,"access_code":"WRONG1","access_reason":"Patient arrived for referred care"})
+        assert denied.status_code==403
+        shared=client.post("/api/v1/care-network/referrals/access",headers=receiver_headers,json={"patient_code":patient_code,"access_code":access_code,"access_reason":"Patient arrived for referred care"})
+        assert shared.status_code==200
+        assert shared.json()["referral"]["clinical_summary"].startswith("Fever assessed")
+        assert any(event["event_type"]=="triage" for event in shared.json()["timeline"])
+        referral_id=shared.json()["referral"]["referral_id"]
+        assert client.patch(f"/api/v1/care-network/referrals/{referral_id}",headers=receiver_headers,json={"status":"accepted","details":"Referral accepted"}).status_code==200
+        assert client.patch(f"/api/v1/care-network/referrals/{referral_id}",headers=receiver_headers,json={"status":"arrived","details":"Patient arrived"}).status_code==200
+        assert client.patch(f"/api/v1/care-network/referrals/{referral_id}",headers=receiver_headers,json={"status":"in_care","details":"Clinical review started"}).status_code==200
+        completed=client.patch(f"/api/v1/care-network/referrals/{referral_id}",headers=receiver_headers,json={"status":"completed","details":"Assessment completed and feedback returned."})
+        assert completed.status_code==200 and completed.json()["status"]=="completed"
