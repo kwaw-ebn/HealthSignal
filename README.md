@@ -1,7 +1,7 @@
 ---
 title: HealthSignal
 emoji: 🩺
-colorFrom: teal
+colorFrom: blue
 colorTo: green
 sdk: gradio
 sdk_version: 5.49.1
