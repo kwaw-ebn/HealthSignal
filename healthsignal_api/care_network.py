@@ -1,10 +1,11 @@
 import hashlib
 import json
+import math
 import secrets
 import uuid
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
@@ -15,6 +16,7 @@ from .database import (
     CareEvent,
     Facility,
     LaboratoryTest,
+    LocationAccessGrant,
     MedicationOrder,
     NetworkReferral,
     NetworkReferralEvent,
@@ -47,6 +49,38 @@ def facility_for(user):
     if not facility:
         raise HTTPException(422, "Your account must be assigned to a facility")
     return facility
+
+
+def distance_metres(lat1, lon1, lat2, lon2):
+    """Great-circle distance between two coordinate pairs."""
+    radius = 6_371_000
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp, dl = math.radians(lat2-lat1), math.radians(lon2-lon1)
+    a = math.sin(dp/2)**2 + math.cos(p1)*math.cos(p2)*math.sin(dl/2)**2
+    return radius * 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+
+
+def care_user(x_care_access: str | None = Header(None), user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """Require a current location grant when the assigned facility enables geofencing."""
+    require_care_role(user); facility = facility_for(user)
+    config = db.scalar(select(Facility).where(Facility.name == facility, Facility.active.is_(True)))
+    if not config or not config.geofence_enabled:
+        return user
+    if not x_care_access:
+        raise HTTPException(403, "Verify your workplace location before using Care Network", headers={"X-Care-Location":"required"})
+    grant_hash = hashlib.sha256(x_care_access.encode()).hexdigest()
+    grant = db.scalar(select(LocationAccessGrant).where(LocationAccessGrant.grant_hash == grant_hash, LocationAccessGrant.username == user.username, LocationAccessGrant.facility == facility, LocationAccessGrant.revoked.is_(False)))
+    if not grant or grant.expires_at <= datetime.utcnow():
+        raise HTTPException(403, "Your workplace location verification has expired", headers={"X-Care-Location":"required"})
+    return user
+
+
+def care_allow(*roles):
+    def check(user: User = Depends(care_user)):
+        if user.role not in roles:
+            raise HTTPException(403, "Your role cannot perform this Care Network action")
+        return user
+    return check
 
 
 def audit(db, user, action, target_type, target_id, details=""):
@@ -99,8 +133,73 @@ def require_local_episode(db, episode_id, user):
     return episode
 
 
+@router.get("/security")
+def location_security(user: User = Depends(current_user), db: Session = Depends(get_db)):
+    require_care_role(user); facility = facility_for(user)
+    config = db.scalar(select(Facility).where(Facility.name == facility, Facility.active.is_(True)))
+    return {
+        "facility": facility,
+        "configured": bool(config and config.latitude is not None and config.longitude is not None),
+        "geofence_enabled": bool(config and config.geofence_enabled),
+        "allowed_radius_m": config.allowed_radius_m if config else 250,
+        "grant_minutes": 20,
+        "administrator": user.role == "administrator",
+        "notice": "Presentation control only. Production use requires additional device, MFA and network security.",
+    }
+
+
+@router.put("/security/config")
+def configure_location_security(payload: dict, user: User = Depends(allow("administrator")), db: Session = Depends(get_db)):
+    name = clean(payload.get("facility"), 160) or facility_for(user)
+    try:
+        latitude, longitude = float(payload.get("latitude")), float(payload.get("longitude"))
+        radius = int(payload.get("allowed_radius_m", 250))
+    except (TypeError, ValueError):
+        raise HTTPException(422, "Valid facility coordinates and radius are required")
+    if not -90 <= latitude <= 90 or not -180 <= longitude <= 180 or not 50 <= radius <= 5000:
+        raise HTTPException(422, "Coordinates or radius are outside the permitted range")
+    row = db.scalar(select(Facility).where(Facility.name == name))
+    if not row:
+        row = Facility(facility_id=str(uuid.uuid4()), name=name, facility_type=clean(payload.get("facility_type"), 60) or "Hospital", district=clean(payload.get("district"), 120) or clean(user.district, 120) or "Not assigned", region=clean(payload.get("region"), 120) or clean(user.region, 120) or "Not assigned", created_by=user.username)
+        db.add(row)
+    row.latitude=latitude; row.longitude=longitude; row.allowed_radius_m=radius; row.geofence_enabled=payload.get("geofence_enabled") is True; row.active=True
+    audit(db, user, "care_geofence_configured", "facility", row.facility_id, f"enabled={row.geofence_enabled}; radius={radius}m")
+    db.commit()
+    return {"message":"Facility location security updated","facility":name,"geofence_enabled":row.geofence_enabled,"allowed_radius_m":radius}
+
+
+@router.post("/security/verify")
+def verify_workplace_location(payload: dict, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    require_care_role(user); facility = facility_for(user)
+    config = db.scalar(select(Facility).where(Facility.name == facility, Facility.active.is_(True)))
+    if not config or not config.geofence_enabled:
+        audit(db, user, "care_location_not_required", "facility", facility, "Geofence disabled"); db.commit()
+        return {"verified":True,"restricted":False,"facility":facility,"message":"Location restriction is not enabled for this facility"}
+    if config.latitude is None or config.longitude is None:
+        raise HTTPException(409, "The administrator must configure facility coordinates")
+    try:
+        latitude, longitude = float(payload.get("latitude")), float(payload.get("longitude"))
+        accuracy = float(payload.get("accuracy_m")) if payload.get("accuracy_m") is not None else None
+    except (TypeError, ValueError):
+        raise HTTPException(422, "Valid device coordinates are required")
+    if not -90 <= latitude <= 90 or not -180 <= longitude <= 180:
+        raise HTTPException(422, "Invalid device coordinates")
+    distance = round(distance_metres(latitude, longitude, config.latitude, config.longitude), 1)
+    accuracy_limit = max(config.allowed_radius_m, 500)
+    if accuracy is not None and (accuracy < 0 or accuracy > accuracy_limit):
+        audit(db, user, "care_location_denied", "facility", facility, f"accuracy={accuracy:.1f}m"); db.commit()
+        raise HTTPException(403, f"Location accuracy is too low ({accuracy:.0f} m). Move near a window or use a GPS enabled device")
+    if distance > config.allowed_radius_m:
+        audit(db, user, "care_location_denied", "facility", facility, f"distance={distance}m; radius={config.allowed_radius_m}m"); db.commit()
+        raise HTTPException(403, f"You are approximately {distance:.0f} metres from the approved facility area")
+    raw_grant = secrets.token_urlsafe(32); grant_hash = hashlib.sha256(raw_grant.encode()).hexdigest(); expires = datetime.utcnow()+timedelta(minutes=20)
+    db.add(LocationAccessGrant(grant_hash=grant_hash,username=user.username,facility=facility,latitude=latitude,longitude=longitude,accuracy_m=accuracy,distance_m=distance,expires_at=expires))
+    audit(db, user, "care_location_verified", "facility", facility, f"distance={distance}m; accuracy={accuracy}m"); db.commit()
+    return {"verified":True,"restricted":True,"facility":facility,"distance_m":distance,"allowed_radius_m":config.allowed_radius_m,"expires_at":expires.isoformat(),"care_access_token":raw_grant}
+
+
 @router.get("/overview")
-def overview(user: User = Depends(current_user), db: Session = Depends(get_db)):
+def overview(user: User = Depends(care_user), db: Session = Depends(get_db)):
     require_care_role(user)
     facility = facility_for(user)
     episodes = db.scalars(select(CareEpisode).where(CareEpisode.facility == facility).order_by(CareEpisode.created_at.desc()).limit(200)).all()
@@ -133,7 +232,7 @@ def create_facility(payload: dict, user: User = Depends(allow("administrator")),
 
 
 @router.get("/facilities")
-def list_facilities(user: User = Depends(current_user), db: Session = Depends(get_db)):
+def list_facilities(user: User = Depends(care_user), db: Session = Depends(get_db)):
     require_care_role(user)
     rows = db.scalars(select(Facility).where(Facility.active.is_(True)).order_by(Facility.name)).all()
     names = {row.name for row in rows}
@@ -145,7 +244,7 @@ def list_facilities(user: User = Depends(current_user), db: Session = Depends(ge
 
 
 @router.post("/episodes", status_code=201)
-def register_episode(payload: dict, user: User = Depends(allow("administrator", "clinician", "nutritionist_dietitian", "field_officer")), db: Session = Depends(get_db)):
+def register_episode(payload: dict, user: User = Depends(care_allow("administrator", "clinician", "nutritionist_dietitian", "field_officer")), db: Session = Depends(get_db)):
     facility = facility_for(user)
     patient_code = clean(payload.get("patient_code"), 64).upper()
     if not patient_code:
@@ -170,7 +269,7 @@ def register_episode(payload: dict, user: User = Depends(allow("administrator", 
 
 
 @router.get("/episodes")
-def list_episodes(department: str | None = None, status: str | None = None, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def list_episodes(department: str | None = None, status: str | None = None, user: User = Depends(care_user), db: Session = Depends(get_db)):
     require_care_role(user); facility = facility_for(user)
     stmt = select(CareEpisode).where(CareEpisode.facility == facility).order_by(CareEpisode.created_at.desc()).limit(300)
     if department: stmt = stmt.where(CareEpisode.assigned_department == department)
@@ -179,7 +278,7 @@ def list_episodes(department: str | None = None, status: str | None = None, user
 
 
 @router.post("/episodes/{episode_id}/triage", status_code=201)
-def add_triage(episode_id: str, payload: dict, user: User = Depends(allow("administrator", "clinician", "field_officer")), db: Session = Depends(get_db)):
+def add_triage(episode_id: str, payload: dict, user: User = Depends(care_allow("administrator", "clinician", "field_officer")), db: Session = Depends(get_db)):
     episode = require_local_episode(db, episode_id, user)
     vitals = {key: payload.get(key) for key in ("temperature_c", "pulse", "respiratory_rate", "oxygen_saturation", "systolic", "diastolic", "weight_kg", "height_cm")}
     if not any(value is not None and value != "" for value in vitals.values()):
@@ -193,7 +292,7 @@ def add_triage(episode_id: str, payload: dict, user: User = Depends(allow("admin
 
 
 @router.post("/episodes/{episode_id}/consultation", status_code=201)
-def add_consultation(episode_id: str, payload: dict, user: User = Depends(allow("administrator", "clinician", "nutritionist_dietitian")), db: Session = Depends(get_db)):
+def add_consultation(episode_id: str, payload: dict, user: User = Depends(care_allow("administrator", "clinician", "nutritionist_dietitian")), db: Session = Depends(get_db)):
     episode = require_local_episode(db, episode_id, user)
     assessment = clean(payload.get("assessment")); plan = clean(payload.get("plan")); disposition = clean(payload.get("disposition"), 60) or "Laboratory"
     if len(assessment) < 3 or len(plan) < 3 or disposition not in DEPARTMENTS | {"Completed"}:
@@ -206,7 +305,7 @@ def add_consultation(episode_id: str, payload: dict, user: User = Depends(allow(
 
 
 @router.post("/episodes/{episode_id}/laboratory", status_code=201)
-def add_lab_result(episode_id: str, payload: dict, user: User = Depends(allow("administrator", "clinician", "field_officer")), db: Session = Depends(get_db)):
+def add_lab_result(episode_id: str, payload: dict, user: User = Depends(care_allow("administrator", "clinician", "field_officer")), db: Session = Depends(get_db)):
     episode = require_local_episode(db, episode_id, user)
     test_name, result = clean(payload.get("test_name"), 100), clean(payload.get("result"), 120)
     if not test_name or not result: raise HTTPException(422, "Test name and result are required")
@@ -218,7 +317,7 @@ def add_lab_result(episode_id: str, payload: dict, user: User = Depends(allow("a
 
 
 @router.post("/episodes/{episode_id}/medications", status_code=201)
-def prescribe(episode_id: str, payload: dict, user: User = Depends(allow("administrator", "clinician", "nutritionist_dietitian")), db: Session = Depends(get_db)):
+def prescribe(episode_id: str, payload: dict, user: User = Depends(care_allow("administrator", "clinician", "nutritionist_dietitian")), db: Session = Depends(get_db)):
     episode = require_local_episode(db, episode_id, user); medicine, instructions = clean(payload.get("medicine"), 160), clean(payload.get("instructions"))
     if not medicine or not instructions: raise HTTPException(422, "Medicine and instructions are required")
     row = MedicationOrder(order_id=str(uuid.uuid4()), episode_id=episode_id, patient_code=episode.patient_code, facility=episode.facility, medicine=medicine, instructions=instructions, prescribed_by=user.username)
@@ -229,14 +328,14 @@ def prescribe(episode_id: str, payload: dict, user: User = Depends(allow("admini
 
 
 @router.get("/medications")
-def list_medications(user: User = Depends(current_user), db: Session = Depends(get_db)):
+def list_medications(user: User = Depends(care_user), db: Session = Depends(get_db)):
     require_care_role(user); facility = facility_for(user)
     rows = db.scalars(select(MedicationOrder).where(MedicationOrder.facility == facility).order_by(MedicationOrder.created_at.desc()).limit(200)).all()
     return [{"order_id": row.order_id, "episode_id": row.episode_id, "patient_code": row.patient_code, "medicine": row.medicine, "instructions": row.instructions, "status": row.status, "prescribed_by": row.prescribed_by} for row in rows]
 
 
 @router.patch("/medications/{order_id}/dispense")
-def dispense(order_id: str, user: User = Depends(allow("administrator", "clinician", "field_officer")), db: Session = Depends(get_db)):
+def dispense(order_id: str, user: User = Depends(care_allow("administrator", "clinician", "field_officer")), db: Session = Depends(get_db)):
     row = db.scalar(select(MedicationOrder).where(MedicationOrder.order_id == order_id))
     if not row: raise HTTPException(404, "Medication order not found")
     if user.role != "administrator" and row.facility.casefold() != facility_for(user).casefold(): raise HTTPException(403, "This order belongs to another facility")
@@ -249,7 +348,7 @@ def dispense(order_id: str, user: User = Depends(allow("administrator", "clinici
 
 
 @router.post("/referrals", status_code=201)
-def create_network_referral(payload: dict, user: User = Depends(allow("administrator", "clinician", "nutritionist_dietitian")), db: Session = Depends(get_db)):
+def create_network_referral(payload: dict, user: User = Depends(care_allow("administrator", "clinician", "nutritionist_dietitian")), db: Session = Depends(get_db)):
     episode = require_local_episode(db, clean(payload.get("episode_id"), 36), user)
     destination, reason, summary = clean(payload.get("destination_facility"), 160), clean(payload.get("reason")), clean(payload.get("clinical_summary"))
     urgency = clean(payload.get("urgency"), 20) or "routine"
@@ -265,14 +364,14 @@ def create_network_referral(payload: dict, user: User = Depends(allow("administr
 
 
 @router.get("/referrals")
-def list_network_referrals(user: User = Depends(current_user), db: Session = Depends(get_db)):
+def list_network_referrals(user: User = Depends(care_user), db: Session = Depends(get_db)):
     require_care_role(user); facility = facility_for(user)
     rows = db.scalars(select(NetworkReferral).where(or_(NetworkReferral.source_facility == facility, NetworkReferral.destination_facility == facility)).order_by(NetworkReferral.created_at.desc()).limit(200)).all()
     return [referral_json(row, row.source_facility == facility or user.role == "administrator") for row in rows]
 
 
 @router.post("/referrals/access")
-def access_referral(payload: dict, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def access_referral(payload: dict, user: User = Depends(care_user), db: Session = Depends(get_db)):
     require_care_role(user); facility = facility_for(user)
     patient_code, access_code, reason = clean(payload.get("patient_code"), 64).upper(), clean(payload.get("access_code"), 20).upper(), clean(payload.get("access_reason"), 500)
     if len(reason) < 5: raise HTTPException(422, "State why this record is being accessed")
@@ -289,7 +388,7 @@ def access_referral(payload: dict, user: User = Depends(current_user), db: Sessi
 
 
 @router.patch("/referrals/{referral_id}")
-def update_network_referral(referral_id: str, payload: dict, user: User = Depends(allow("administrator", "clinician", "nutritionist_dietitian", "field_officer")), db: Session = Depends(get_db)):
+def update_network_referral(referral_id: str, payload: dict, user: User = Depends(care_allow("administrator", "clinician", "nutritionist_dietitian", "field_officer")), db: Session = Depends(get_db)):
     row = db.scalar(select(NetworkReferral).where(NetworkReferral.referral_id == referral_id))
     if not row: raise HTTPException(404, "Referral not found")
     facility = facility_for(user); status = clean(payload.get("status"), 30)
@@ -308,7 +407,7 @@ def update_network_referral(referral_id: str, payload: dict, user: User = Depend
 
 
 @router.get("/patients/{patient_code}/timeline")
-def local_patient_timeline(patient_code: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def local_patient_timeline(patient_code: str, user: User = Depends(care_user), db: Session = Depends(get_db)):
     require_care_role(user); facility = facility_for(user); patient_code = patient_code.upper()
     events = db.scalars(select(CareEvent).where(CareEvent.patient_code == patient_code, CareEvent.facility == facility).order_by(CareEvent.created_at)).all()
     if not events: raise HTTPException(404, "No local care history found")

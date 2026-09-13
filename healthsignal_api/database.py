@@ -199,6 +199,10 @@ class Facility(Base):
     facility_type: Mapped[str] = mapped_column(String(60), default="Hospital")
     district: Mapped[str] = mapped_column(String(120), index=True)
     region: Mapped[str] = mapped_column(String(120), index=True)
+    latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    allowed_radius_m: Mapped[int] = mapped_column(Integer, default=250)
+    geofence_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_by: Mapped[str] = mapped_column(String(80))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
@@ -279,6 +283,20 @@ class NetworkReferralEvent(Base):
     details: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
+class LocationAccessGrant(Base):
+    __tablename__ = "location_access_grants"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    grant_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    username: Mapped[str] = mapped_column(String(80), index=True)
+    facility: Mapped[str] = mapped_column(String(160), index=True)
+    latitude: Mapped[float] = mapped_column(Float)
+    longitude: Mapped[float] = mapped_column(Float)
+    accuracy_m: Mapped[float | None] = mapped_column(Float, nullable=True)
+    distance_m: Mapped[float] = mapped_column(Float)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    revoked: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
 def init_db():
     Base.metadata.create_all(bind=engine)
     # create_all does not add columns to an existing table. This small, additive
@@ -303,6 +321,13 @@ def init_db():
         for name,sql_type in screening_additions.items():
             if name not in screening_columns:
                 conn.execute(text(f"ALTER TABLE screenings ADD COLUMN {name} {sql_type}"))
+    if inspect(engine).has_table("facilities"):
+        facility_columns={c["name"] for c in inspect(engine).get_columns("facilities")}
+        facility_additions={"latitude":"FLOAT","longitude":"FLOAT","allowed_radius_m":"INTEGER DEFAULT 250","geofence_enabled":"BOOLEAN DEFAULT FALSE"}
+        with engine.begin() as conn:
+            for name,sql_type in facility_additions.items():
+                if name not in facility_columns:
+                    conn.execute(text(f"ALTER TABLE facilities ADD COLUMN {name} {sql_type}"))
 def get_db():
     db = SessionLocal()
     try: yield db

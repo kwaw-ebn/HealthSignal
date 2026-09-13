@@ -126,3 +126,20 @@ def test_care_network_patient_journey_and_controlled_referral_access():
         assert client.patch(f"/api/v1/care-network/referrals/{referral_id}",headers=receiver_headers,json={"status":"in_care","details":"Clinical review started"}).status_code==200
         completed=client.patch(f"/api/v1/care-network/referrals/{referral_id}",headers=receiver_headers,json={"status":"completed","details":"Assessment completed and feedback returned."})
         assert completed.status_code==200 and completed.json()["status"]=="completed"
+
+def test_care_network_geofence_requires_short_location_grant():
+    with TestClient(app) as client:
+        headers=admin_headers(client)
+        configured=client.put("/api/v1/care-network/security/config",headers=headers,json={"facility":"HealthSignal Demonstration Hospital","latitude":5.6037,"longitude":-0.1870,"allowed_radius_m":250,"geofence_enabled":True})
+        assert configured.status_code==200 and configured.json()["geofence_enabled"] is True
+        blocked=client.get("/api/v1/care-network/overview",headers=headers)
+        assert blocked.status_code==403 and blocked.headers["x-care-location"]=="required"
+        outside=client.post("/api/v1/care-network/security/verify",headers=headers,json={"latitude":5.6200,"longitude":-0.1870,"accuracy_m":20})
+        assert outside.status_code==403
+        verified=client.post("/api/v1/care-network/security/verify",headers=headers,json={"latitude":5.6038,"longitude":-0.1870,"accuracy_m":15})
+        assert verified.status_code==200 and verified.json()["verified"] is True
+        grant=verified.json()["care_access_token"]
+        allowed=client.get("/api/v1/care-network/overview",headers={**headers,"X-Care-Access":grant})
+        assert allowed.status_code==200
+        wrong_grant=client.get("/api/v1/care-network/overview",headers={**headers,"X-Care-Access":"not-a-valid-grant"})
+        assert wrong_grant.status_code==403
