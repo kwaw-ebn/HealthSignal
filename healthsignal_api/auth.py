@@ -23,7 +23,17 @@ def current_user(credentials:HTTPAuthorizationCredentials=Depends(bearer),db:Ses
     if not credentials or not SECRET: raise HTTPException(401,"Authentication required")
     try: username=jwt.decode(credentials.credentials,SECRET,algorithms=[ALGORITHM])["sub"]
     except (JWTError,KeyError): raise HTTPException(401,"Invalid or expired session")
-    user=db.scalar(select(User).where(User.username==username,User.active.is_(True)))
+    user=db.scalar(select(User).where(User.username==username,User.active.is_(True),User.status=="approved"))
+    if not user: raise HTTPException(401,"User account unavailable")
+    if user.force_password_change: raise HTTPException(403,"Password change required",headers={"X-Password-Change":"required"})
+    return user
+
+def authenticated_user(credentials:HTTPAuthorizationCredentials=Depends(bearer),db:Session=Depends(get_db)):
+    """Allows an approved user to reach the password-change endpoint."""
+    if not credentials or not SECRET: raise HTTPException(401,"Authentication required")
+    try: username=jwt.decode(credentials.credentials,SECRET,algorithms=[ALGORITHM])["sub"]
+    except (JWTError,KeyError): raise HTTPException(401,"Invalid or expired session")
+    user=db.scalar(select(User).where(User.username==username,User.active.is_(True),User.status=="approved"))
     if not user: raise HTTPException(401,"User account unavailable")
     return user
 def allow(*roles):
