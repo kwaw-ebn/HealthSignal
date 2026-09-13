@@ -57,3 +57,16 @@ def test_non_admin_cannot_list_users():
         login=client.post("/api/v1/auth/login",json={"username":"ama.mensah","password":"TemporaryPass123"}).json()
         worker_headers={"Authorization":f"Bearer {login['access_token']}"}
         assert client.get("/api/v1/users",headers=worker_headers).status_code==403
+
+def test_relational_encounter_history_and_surveillance():
+    with TestClient(app) as client:
+        headers=admin_headers(client)
+        payload={"patient_code":"PT-FIELD01","visit_date":"2026-09-13","age":34,"sex":"Female","region":"Central","district":"Agona East","community":"Duakwa","facility":"Duakwa Health Centre","disease":"malaria","temperature_c":38.1,"fever_or_history":True,"malaria_test":"RDT","malaria_result":"Positive","case_status":"confirmed","symptoms":["fever","headache"],"lab_test_name":"Malaria RDT","lab_result":"Positive","outcome":"Referred","follow_up_date":"2026-09-16","completion_status":"complete"}
+        created=client.post("/api/v1/screenings",headers=headers,json=payload)
+        assert created.status_code==201 and created.json()["encounter_id"]
+        history=client.get("/api/v1/patients/PT-FIELD01",headers=headers)
+        assert history.status_code==200
+        assert history.json()["laboratory_tests"][0]["result"]=="Positive"
+        summary=client.get("/api/v1/surveillance/summary?days=90",headers=headers)
+        assert summary.status_code==200
+        assert summary.json()["confirmed"]>=1
