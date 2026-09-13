@@ -1,0 +1,20 @@
+name: Deploy to Hugging Face Space
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Push application to Hugging Face
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          git remote add space https://kwaw-ebn:$HF_TOKEN@huggingface.co/spaces/kwaw-ebn/HealthSignal
+          git push --force space main
