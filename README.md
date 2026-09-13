@@ -1,41 +1,32 @@
----
-title: HealthSignal
-emoji: 🩺
-colorFrom: blue
-colorTo: green
-sdk: gradio
-sdk_version: 5.49.1
-app_file: app.py
-pinned: false
----
-
 # HealthSignal
 
 A Ghana focused field screening, early warning and public health decision support platform created by **Ebenezer Kwaw**.
 
-## Current capabilities
+## Features
 
-- Responsive frontend for mobile, tablet and laptop
-- Python screening and data backend hosted with the interface
+- Professional custom responsive frontend for mobile, tablet and laptop
+- FastAPI backend serving the website and API
 - Hypertension, diabetes, malaria and TB screening workflows
 - Automatic BMI calculation
-- Transparent priority classification and referral recommendations
-- Non identifying screening records, surveillance summary and CSV export
-- Docker configuration for Hugging Face Spaces
+- Transparent priority classifications and referral recommendations
+- Non identifying records, surveillance dashboard and CSV export
+- Render Blueprint configuration
 
 ## Run locally
 
 ```bash
 pip install -r requirements.txt
-python app.py
+uvicorn healthsignal_api.main:app --reload --port 8000
 ```
 
-Open `http://localhost:7860`.
+Open `http://localhost:8000`. API documentation is available at `/docs`.
 
-## Deploy on Hugging Face Spaces
+## Deploy on Render
 
-Create a new **Docker Space**, then connect or upload this repository. Hugging Face will build the included `Dockerfile` and serve both the frontend and backend on port `7860`.
+The included `render.yaml` deploys HealthSignal as one free Render web service. The frontend and backend share one origin for faster loading and simpler configuration.
+
+The free service uses temporary SQLite storage for portfolio testing. Connect a managed PostgreSQL database before collecting real programme or patient data.
 
 ## Clinical safety
 
-HealthSignal is a development and clinical review project. It supports screening and surveillance and does not diagnose disease or replace clinical judgement, diagnostic testing or approved Ghana Health Service protocols. It must undergo appropriate clinical, programme, privacy and security review before real patient use.
+HealthSignal is a development and clinical review project. It supports screening and surveillance and does not diagnose disease or replace clinical judgement, diagnostic testing or approved Ghana Health Service protocols.
