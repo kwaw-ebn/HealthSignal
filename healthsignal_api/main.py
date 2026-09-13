@@ -1,13 +1,13 @@
-import os, re, uuid
+import base64, csv, io, json, math, os, re, statistics, uuid
 from pathlib import Path
 from datetime import datetime, timedelta
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
-from .database import AuditLog, Referral, Screening, User, SessionLocal, get_db, init_db
+from .database import Attachment, AuditLog, Encounter, LaboratoryTest, Patient, Referral, Screening, User, SessionLocal, get_db, init_db
 from .auth import allow, authenticated_user, current_user, hash_password, token_for, verify_password
 from .rules import screen
 from .schemas import ScreeningRequest, ScreeningResult
@@ -155,14 +155,26 @@ def audit_logs(limit:int=Query(100,ge=1,le=500),user:User=Depends(allow("adminis
 def frontend(): return FileResponse(STATIC_DIR / "index.html",headers={"Cache-Control":"no-cache, no-store, must-revalidate"})
 @app.post("/api/v1/screenings",response_model=ScreeningResult,status_code=201)
 def create_screening(p: ScreeningRequest,user:User=Depends(allow("administrator","clinician","disease_control_officer","field_worker")),db: Session=Depends(get_db)):
-    d=screen(p); now=datetime.utcnow(); sid=str(uuid.uuid4())
-    db.add(Screening(screening_id=sid,patient_code=p.patient_code,visit_date=p.visit_date.isoformat(),region=p.region,district=p.district,community=p.community,facility=p.facility,age=p.age,sex=p.sex,pregnant=p.pregnant,disease=p.disease,risk_level=d.risk,classification=d.classification,recommendation=d.recommendation,score=d.score,inputs_json=p.model_dump_json(),referred=p.referred,latitude=p.latitude,longitude=p.longitude,created_at=now)); db.commit()
-    return ScreeningResult(screening_id=sid,disease=p.disease,risk_level=d.risk,classification=d.classification,recommendation=d.recommendation,score=d.score,bmi=d.bmi,disclaimer=DISCLAIMER,created_at=now)
+    d=screen(p); now=datetime.utcnow(); sid=str(uuid.uuid4()); eid=str(uuid.uuid4())
+    patient=db.scalar(select(Patient).where(Patient.patient_code==p.patient_code))
+    if not patient:
+        patient=Patient(patient_code=p.patient_code,sex=p.sex,approximate_age=p.age,home_community=p.community,district=p.district,region=p.region,created_by=user.username)
+        db.add(patient)
+    else:
+        patient.sex=p.sex; patient.approximate_age=p.age; patient.home_community=p.community or patient.home_community; patient.district=p.district or patient.district; patient.region=p.region or patient.region; patient.updated_at=now
+    db.add(Screening(screening_id=sid,patient_code=p.patient_code,visit_date=p.visit_date.isoformat(),region=p.region,district=p.district,community=p.community,facility=p.facility,age=p.age,sex=p.sex,pregnant=p.pregnant,disease=p.disease,risk_level=d.risk,classification=d.classification,recommendation=d.recommendation,score=d.score,inputs_json=p.model_dump_json(),referred=p.referred,latitude=p.latitude if p.gps_consent else None,longitude=p.longitude if p.gps_consent else None,case_status=p.case_status,outcome=p.outcome,created_by=user.username,created_at=now,updated_at=now))
+    db.add(Encounter(encounter_id=eid,patient_code=p.patient_code,screening_id=sid,visit_date=p.visit_date.isoformat(),facility=p.facility,community=p.community,district=p.district,region=p.region,temperature_c=p.temperature_c,pulse=p.pulse,respiratory_rate=p.respiratory_rate,oxygen_saturation=p.oxygen_saturation,systolic=p.systolic_1,diastolic=p.diastolic_1,weight_kg=p.weight_kg,height_cm=p.height_cm,bmi=d.bmi,pregnant=p.pregnant,symptoms_json=json.dumps(p.symptoms),notes=p.notes,outcome=p.outcome,follow_up_date=p.follow_up_date.isoformat() if p.follow_up_date else None,completion_status=p.completion_status,created_by=user.username,created_at=now,updated_at=now))
+    if p.lab_test_name and p.lab_result:
+        db.add(LaboratoryTest(test_id=str(uuid.uuid4()),encounter_id=eid,patient_code=p.patient_code,test_name=p.lab_test_name,result=p.lab_result,result_unit=p.lab_result_unit,created_by=user.username))
+    if p.referred and p.referral_destination:
+        db.add(Referral(referral_id=str(uuid.uuid4()),screening_id=sid,patient_code=p.patient_code,destination=p.referral_destination,reason=p.referral_reason or d.recommendation,status="Pending",due_date=p.follow_up_date.isoformat() if p.follow_up_date else None,created_by=user.username))
+    audit(db,user.username,"screening_created","screening",sid,p.disease); db.commit()
+    return ScreeningResult(screening_id=sid,encounter_id=eid,disease=p.disease,risk_level=d.risk,classification=d.classification,recommendation=d.recommendation,score=d.score,bmi=d.bmi,disclaimer=DISCLAIMER,created_at=now)
 @app.get("/api/v1/screenings")
 def list_screenings(limit:int=Query(100,ge=1,le=1000),patient_code:str|None=None,user:User=Depends(current_user),db:Session=Depends(get_db)):
-    stmt=select(Screening).order_by(Screening.created_at.desc()).limit(limit)
+    stmt=select(Screening).where(Screening.archived.is_(False)).order_by(Screening.created_at.desc()).limit(limit)
     if patient_code: stmt=stmt.where(Screening.patient_code==patient_code)
-    return [{"screening_id":r.screening_id,"patient_code":r.patient_code,"visit_date":r.visit_date,"district":r.district,"community":r.community,"disease":r.disease,"risk_level":r.risk_level,"classification":r.classification,"recommendation":r.recommendation,"referred":r.referred} for r in db.scalars(stmt).all()]
+    return [{"screening_id":r.screening_id,"patient_code":r.patient_code,"visit_date":r.visit_date,"district":r.district,"community":r.community,"disease":r.disease,"risk_level":r.risk_level,"classification":r.classification,"recommendation":r.recommendation,"referred":r.referred,"case_status":r.case_status,"outcome":r.outcome} for r in db.scalars(stmt).all()]
 @app.get("/api/v1/dashboard")
 def dashboard(days:int=Query(30,ge=1,le=365),user:User=Depends(current_user),db:Session=Depends(get_db)):
     rows=db.execute(select(Screening.disease,Screening.risk_level,func.count()).where(Screening.created_at>=datetime.utcnow()-timedelta(days=days)).group_by(Screening.disease,Screening.risk_level)).all()
@@ -188,3 +200,91 @@ def update_referral(referral_id:str,payload:dict,user:User=Depends(allow("admini
     status=payload.get("status"); allowed={"Pending","Contacted","Completed","Unable to reach"}
     if status not in allowed: raise HTTPException(422,"Invalid referral status")
     referral.status=status; referral.completed_at=datetime.utcnow() if status=="Completed" else None; db.commit(); return {"referral_id":referral.referral_id,"status":referral.status}
+
+@app.get("/api/v1/patients/{patient_code}")
+def patient_history(patient_code:str,user:User=Depends(current_user),db:Session=Depends(get_db)):
+    patient=db.scalar(select(Patient).where(Patient.patient_code==patient_code,Patient.archived.is_(False)))
+    if not patient: raise HTTPException(404,"Patient code not found")
+    encounters=db.scalars(select(Encounter).where(Encounter.patient_code==patient_code,Encounter.archived.is_(False)).order_by(Encounter.visit_date.desc())).all()
+    labs=db.scalars(select(LaboratoryTest).where(LaboratoryTest.patient_code==patient_code).order_by(LaboratoryTest.tested_at.desc())).all()
+    return {"patient":{"patient_code":patient.patient_code,"sex":patient.sex,"age":patient.approximate_age,"community":patient.home_community,"district":patient.district,"region":patient.region},"encounters":[{"encounter_id":e.encounter_id,"screening_id":e.screening_id,"visit_date":e.visit_date,"facility":e.facility,"community":e.community,"district":e.district,"temperature_c":e.temperature_c,"pulse":e.pulse,"respiratory_rate":e.respiratory_rate,"oxygen_saturation":e.oxygen_saturation,"blood_pressure":f"{e.systolic}/{e.diastolic}" if e.systolic and e.diastolic else None,"weight_kg":e.weight_kg,"height_cm":e.height_cm,"bmi":e.bmi,"pregnant":e.pregnant,"symptoms":json.loads(e.symptoms_json or "[]"),"notes":e.notes,"outcome":e.outcome,"follow_up_date":e.follow_up_date,"completion_status":e.completion_status} for e in encounters],"laboratory_tests":[{"test_name":x.test_name,"result":x.result,"unit":x.result_unit,"tested_at":x.tested_at.isoformat()} for x in labs]}
+
+@app.patch("/api/v1/encounters/{encounter_id}")
+def update_encounter(encounter_id:str,payload:dict,user:User=Depends(allow("administrator","clinician","data_officer","field_worker")),db:Session=Depends(get_db)):
+    encounter=db.scalar(select(Encounter).where(Encounter.encounter_id==encounter_id,Encounter.archived.is_(False)))
+    if not encounter: raise HTTPException(404,"Encounter not found")
+    allowed_fields={"facility","community","district","region","temperature_c","pulse","respiratory_rate","oxygen_saturation","weight_kg","height_cm","pregnant","notes","outcome","follow_up_date","completion_status"}
+    for field,value in payload.items():
+        if field in allowed_fields: setattr(encounter,field,value)
+    if encounter.weight_kg and encounter.height_cm: encounter.bmi=round(encounter.weight_kg/((encounter.height_cm/100)**2),1)
+    encounter.updated_at=datetime.utcnow(); audit(db,user.username,"encounter_updated","encounter",encounter_id); db.commit()
+    return {"message":"Encounter updated","bmi":encounter.bmi}
+
+@app.post("/api/v1/encounters/{encounter_id}/archive")
+def archive_encounter(encounter_id:str,user:User=Depends(allow("administrator","data_officer")),db:Session=Depends(get_db)):
+    encounter=db.scalar(select(Encounter).where(Encounter.encounter_id==encounter_id))
+    if not encounter: raise HTTPException(404,"Encounter not found")
+    encounter.archived=True
+    if encounter.screening_id:
+        screening=db.scalar(select(Screening).where(Screening.screening_id==encounter.screening_id))
+        if screening: screening.archived=True
+    audit(db,user.username,"encounter_archived","encounter",encounter_id); db.commit(); return {"message":"Record archived"}
+
+@app.post("/api/v1/encounters/{encounter_id}/attachments",status_code=201)
+def add_attachment(encounter_id:str,payload:dict,user:User=Depends(allow("administrator","clinician","field_worker")),db:Session=Depends(get_db)):
+    encounter=db.scalar(select(Encounter).where(Encounter.encounter_id==encounter_id,Encounter.archived.is_(False)))
+    if not encounter: raise HTTPException(404,"Encounter not found")
+    if payload.get("consent_confirmed") is not True: raise HTTPException(422,"Consent confirmation is required")
+    content_type=clean(payload.get("content_type")); encoded=str(payload.get("data_base64") or "")
+    if content_type not in {"image/jpeg","image/png","application/pdf"}: raise HTTPException(422,"Only JPG, PNG or PDF files are supported")
+    try: content=base64.b64decode(encoded,validate=True)
+    except Exception: raise HTTPException(422,"Invalid file data")
+    if not content or len(content)>1_000_000: raise HTTPException(413,"File must be 1 MB or smaller on the free tier")
+    attachment=Attachment(attachment_id=str(uuid.uuid4()),encounter_id=encounter_id,patient_code=encounter.patient_code,filename=clean(payload.get("filename"))[:180],content_type=content_type,content=content,consent_confirmed=True,created_by=user.username)
+    db.add(attachment); audit(db,user.username,"attachment_added","encounter",encounter_id,content_type); db.commit(); return {"attachment_id":attachment.attachment_id,"message":"File stored securely"}
+
+def surveillance_rows(db,days,district=None):
+    since=datetime.utcnow()-timedelta(days=days); stmt=select(Screening).where(Screening.created_at>=since,Screening.archived.is_(False))
+    if district: stmt=stmt.where(func.lower(Screening.district)==district.lower())
+    return db.scalars(stmt).all()
+
+@app.get("/api/v1/surveillance/summary")
+def surveillance_summary(days:int=Query(90,ge=7,le=730),district:str|None=None,user:User=Depends(allow("administrator","clinician","disease_control_officer","data_officer")),db:Session=Depends(get_db)):
+    rows=surveillance_rows(db,days,district); today=datetime.utcnow().date(); tests=[r for r in rows if r.case_status in {"tested","confirmed","excluded"}]; confirmed=[r for r in rows if r.case_status=="confirmed"]
+    def counts(key):
+        output={}
+        for row in rows:
+            value=key(row) or "Not recorded"; output[value]=output.get(value,0)+1
+        return [{"label":k,"count":v} for k,v in sorted(output.items(),key=lambda x:-x[1])]
+    weekly={}
+    for r in rows:
+        try:
+            date=datetime.fromisoformat(r.visit_date).date(); start=date-timedelta(days=date.weekday()); label=start.isoformat()
+        except Exception: label="Unknown"
+        weekly[label]=weekly.get(label,0)+1
+    high=[r for r in rows if r.risk_level in {"High","Urgent"}]; hotspots={}
+    for r in high:
+        key=f"{r.community or 'Unknown'}, {r.district or 'Unknown'}"; hotspots.setdefault(key,{"community":r.community or "Unknown","district":r.district or "Unknown","count":0,"latitude":r.latitude,"longitude":r.longitude}); hotspots[key]["count"]+=1
+    referrals=db.scalars(select(Referral).where(Referral.created_at>=datetime.utcnow()-timedelta(days=days))).all(); completed=sum(1 for r in referrals if r.status=="Completed")
+    current=sum(1 for r in rows if (today-r.created_at.date()).days<7); prior=[sum(1 for r in rows if 7*i<=(today-r.created_at.date()).days<7*(i+1)) for i in range(1,5)]; baseline=statistics.mean(prior) if prior else 0; alert=current>=3 and current>=(baseline*2 if baseline else 3)
+    return {"period_days":days,"total":len(rows),"district_counts":counts(lambda r:r.district),"community_counts":counts(lambda r:r.community),"disease_counts":counts(lambda r:r.disease),"weekly_trends":[{"week":k,"count":weekly[k]} for k in sorted(weekly)],"age_distribution":counts(lambda r:"0–4" if r.age<5 else "5–14" if r.age<15 else "15–24" if r.age<25 else "25–44" if r.age<45 else "45–64" if r.age<65 else "65+"),"sex_distribution":counts(lambda r:r.sex),"case_status":counts(lambda r:r.case_status),"tested":len(tests),"confirmed":len(confirmed),"test_positivity_rate":round(len(confirmed)/len(tests)*100,1) if tests else None,"hotspots":sorted(hotspots.values(),key=lambda x:-x["count"]),"alert":{"active":alert,"current_week":current,"four_week_average":round(baseline,1),"message":"Abnormal increase requires investigation" if alert else "No statistical alert at the current threshold"},"referral_completion_rate":round(completed/len(referrals)*100,1) if referrals else None,"referrals_total":len(referrals),"note":"Signals are based on screening records and require epidemiological review."}
+
+@app.get("/api/v1/surveillance/forecast")
+def forecast(disease:str|None=None,district:str|None=None,user:User=Depends(allow("administrator","disease_control_officer","data_officer")),db:Session=Depends(get_db)):
+    rows=surveillance_rows(db,180,district)
+    if disease: rows=[r for r in rows if r.disease==disease]
+    weeks={}
+    for r in rows:
+        start=r.created_at.date()-timedelta(days=r.created_at.weekday()); weeks[start.isoformat()]=weeks.get(start.isoformat(),0)+1
+    values=[weeks[k] for k in sorted(weeks)][-12:]
+    if len(values)<4: return {"status":"insufficient_data","message":"At least four weeks of reporting data are required","model_version":"baseline-1.0","last_training_date":datetime.utcnow().date().isoformat()}
+    recent=values[-4:]; expected=statistics.mean(recent); uncertainty=max(1,statistics.stdev(recent) if len(recent)>1 else math.sqrt(expected)); trend=(recent[-1]-recent[0])/max(1,len(recent)-1)
+    predictions=[max(0,round(expected+trend*i,1)) for i in range(1,5)]; upper=[round(x+1.96*uncertainty,1) for x in predictions]; risk="High" if trend>max(1,expected*.25) else "Moderate" if trend>0 else "Low"
+    return {"status":"available","risk_level":risk,"expected_cases_next_1_to_4_weeks":predictions,"upper_uncertainty_bounds":upper,"contributing_indicators":{"recent_weekly_counts":recent,"weekly_trend":round(trend,2),"district":district or "All","disease":disease or "All"},"model_version":"transparent-baseline-1.0","last_training_date":datetime.utcnow().date().isoformat(),"recommended_response":"Review data quality and investigate communities driving the increase." if risk!="Low" else "Continue routine surveillance and reporting.","disclaimer":"Aggregate planning signal only. It does not predict individual diagnoses."}
+
+@app.get("/api/v1/reports/district.csv")
+def district_report(district:str="",days:int=Query(90,ge=7,le=730),user:User=Depends(allow("administrator","disease_control_officer","data_officer")),db:Session=Depends(get_db)):
+    rows=surveillance_rows(db,days,district or None); output=io.StringIO(); writer=csv.writer(output); writer.writerow(["visit_date","district","community","patient_code","disease","case_status","risk_level","outcome","referred"])
+    for r in rows: writer.writerow([r.visit_date,r.district,r.community,r.patient_code,r.disease,r.case_status,r.risk_level,r.outcome or "",r.referred])
+    audit(db,user.username,"district_report_downloaded","report",district or "all",f"{days} days"); db.commit()
+    return Response(output.getvalue(),media_type="text/csv",headers={"Content-Disposition":f'attachment; filename="healthsignal-{(district or "all").replace(" ","-").lower()}-{days}d.csv"'})
