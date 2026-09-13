@@ -44,6 +44,21 @@ class ScreeningRequest(BaseModel):
     latitude: float | None = Field(default=None, ge=-90, le=90)
     longitude: float | None = Field(default=None, ge=-180, le=180)
     gps_consent: bool = False
+    gestational_age_weeks: int | None = Field(default=None, ge=0, le=45)
+    gravida: int | None = Field(default=None, ge=0, le=30); parity: int | None = Field(default=None, ge=0, le=30); anc_visits: int | None = Field(default=None, ge=0, le=30)
+    haemoglobin_g_dl: float | None = Field(default=None, ge=1, le=25)
+    hiv_test_status: str | None = Field(default=None, max_length=40); syphilis_test_status: str | None = Field(default=None, max_length=40)
+    previous_caesarean: bool = False; multiple_pregnancy: bool = False; reduced_fetal_movement: bool = False
+    maternal_warning_signs: str | None = Field(default=None, max_length=500)
+    muac_cm: float | None = Field(default=None, ge=5, le=40); bilateral_oedema: bool = False; feeding_problem: bool = False; feeding_history: str | None = Field(default=None, max_length=500)
+    anaemia_symptoms: str | None = Field(default=None, max_length=500); iron_folic_acid_status: str | None = Field(default=None, max_length=40); pregnancy_malaria_status: str | None = Field(default=None, max_length=40)
+    test_offered: bool = False; hiv_result_category: str | None = Field(default=None, max_length=40); confirmation_status: str | None = Field(default=None, max_length=40); linkage_status: str | None = Field(default=None, max_length=40)
+    stool_count_24h: int | None = Field(default=None, ge=0, le=100); diarrhoea_duration_days: int | None = Field(default=None, ge=0, le=90); dehydration_level: str | None = Field(default=None, max_length=40); specimen_status: str | None = Field(default=None, max_length=40); disease_test_result: str | None = Field(default=None, max_length=40)
+    rash_present: bool = False; vaccination_status: str | None = Field(default=None, max_length=40); symptom_onset_date: date | None = None; contact_history: bool = False
+    neck_stiffness: bool = False; altered_consciousness: bool = False; breathing_difficulty: bool = False; cough_present: bool = False
+    hepatitis_exposure: str | None = Field(default=None, max_length=500); jaundice_present: bool = False
+    questionnaire_name: str | None = Field(default=None, max_length=80); questionnaire_score: float | None = Field(default=None, ge=0, le=1000); questionnaire_risk: str | None = Field(default=None, max_length=30); functional_impairment: bool = False; urgent_safety_concern: bool = False
+    ncd_condition: str | None = Field(default=None, max_length=100); ncd_measurement: float | None = None; ncd_unit: str | None = Field(default=None, max_length=40); ncd_reported_priority: str | None = Field(default=None, max_length=30)
     @field_validator("disease")
     @classmethod
     def module_supported(cls,value):
