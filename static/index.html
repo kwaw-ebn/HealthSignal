@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#075968"><title>HealthSignal | Public Health Decision Support</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="#"><img src="/static/logo.jpg" alt="HealthSignal logo"><span><b>HealthSignal</b><small>Public Health Intelligence</small></span></a>
+    <nav>
+      <button class="nav active" data-view="screening">⊕ <span>Field Screening</span></button>
+      <button class="nav" data-view="dashboard">▦ <span>Dashboard</span></button>
+      <button class="nav" data-view="records">≡ <span>Records</span></button>
+      <button class="nav" data-view="about">ⓘ <span>About</span></button>
+    </nav>
+    <div class="creator"><span>Created by</span><strong>Ebenezer Kwaw</strong><small>Public Health and AI</small></div>
+  </aside>
+  <header class="mobile-head"><button id="menu" aria-label="Open menu">☰</button><img src="/static/logo.jpg" alt=""><b>HealthSignal</b></header>
+  <main>
+    <section class="hero"><div><span class="eyebrow">GHANA FOCUSED DIGITAL HEALTH</span><h1>From field data to an earlier health signal.</h1><p>Screen priority conditions, record community signals and support timely public health action.</p></div><div class="status"><i></i><span><b>System online</b><small>Screening support ready</small></span></div></section>
+
+    <section id="screening" class="view active-view">
+      <div class="section-title"><div><h2>New field screening</h2><p>Use a non identifying patient code. Required fields are marked.</p></div><span class="secure">Privacy first</span></div>
+      <form id="screenForm" class="card">
+        <h3>Visit information</h3><div class="grid four">
+          <label>Patient code *<input id="patient_code" required maxlength="64"></label>
+          <label>Visit date *<input id="visit_date" type="date" required></label>
+          <label>Age *<input id="age" type="number" min="0" max="120" required></label>
+          <label>Sex *<select id="sex"><option>Female</option><option>Male</option><option>Other</option><option>Unknown</option></select></label>
+        </div>
+        <div class="grid four"><label>Region<input id="region" value="Central"></label><label>District<input id="district" value="Agona East"></label><label>Community<input id="community"></label><label>Facility / outreach<input id="facility"></label></div>
+        <h3>Screening module</h3><div class="modules" id="modules">
+          <button type="button" class="module selected" data-disease="hypertension"><b>Hypertension</b><small>Blood pressure and cardiovascular priority</small></button>
+          <button type="button" class="module" data-disease="diabetes"><b>Diabetes</b><small>Glucose and metabolic risk</small></button>
+          <button type="button" class="module" data-disease="malaria"><b>Malaria</b><small>Fever, testing and priority groups</small></button>
+          <button type="button" class="module" data-disease="tb"><b>Tuberculosis</b><small>Symptoms, exposure and referral</small></button>
+        </div>
+        <div id="clinicalFields"></div>
+        <button class="primary" type="submit">Screen and save <span>→</span></button>
+      </form>
+      <div id="result"></div>
+    </section>
+
+    <section id="dashboard" class="view"><div class="section-title"><div><h2>Surveillance dashboard</h2><p>Screening signals are not confirmed disease incidence.</p></div><select id="days"><option value="7">7 days</option><option value="30" selected>30 days</option><option value="90">90 days</option><option value="365">1 year</option></select></div><div class="metrics"><div class="metric"><span>Total screenings</span><b id="total">0</b></div><div class="metric"><span>High or urgent</span><b id="high">0</b></div><div class="metric"><span>Reporting period</span><b id="period">30 days</b></div></div><div class="card"><h3>Signals by condition and priority</h3><div id="bars" class="bars"><p class="muted">No screening data recorded yet.</p></div></div></section>
+    <section id="records" class="view"><div class="section-title"><div><h2>Screening records</h2><p>Review non identifying field screening records.</p></div><button id="export" class="secondary">Export CSV</button></div><div class="card table-wrap"><table><thead><tr><th>Date</th><th>Patient code</th><th>Condition</th><th>Priority</th><th>Classification</th><th>District</th></tr></thead><tbody id="recordRows"></tbody></table></div></section>
+    <section id="about" class="view"><div class="card prose"><span class="eyebrow">ABOUT THE PROJECT</span><h2>Public health intelligence designed for field realities</h2><p>HealthSignal is a Ghana focused screening and surveillance platform developed by Ebenezer Kwaw. It combines structured field capture, transparent decision support and aggregate public health signals.</p><div class="notice"><b>Clinical safety notice</b><p>This development version supports screening and surveillance. It does not diagnose disease or replace clinical judgement, diagnostic testing or approved Ghana Health Service protocols.</p></div></div></section>
+  </main>
+  <div id="toast" role="status"></div><script src="/static/app.js"></script>
+</body></html>

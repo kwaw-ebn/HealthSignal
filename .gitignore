@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+surveilai.db
+healthsignal.db
+tmp_shp/
+.env
