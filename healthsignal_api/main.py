@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
-from .database import Attachment, AuditLog, Encounter, LaboratoryTest, Patient, Referral, Screening, User, SessionLocal, get_db, init_db
+from .database import Attachment, AuditLog, Encounter, LaboratoryTest, Patient, Referral, ReviewCase, ReviewEvent, Screening, User, SessionLocal, get_db, init_db
 from .auth import allow, authenticated_user, current_user, hash_password, token_for, verify_password
 from .rules import screen
 from .schemas import ScreeningRequest, ScreeningResult
@@ -32,15 +32,49 @@ def bootstrap_admin():
         elif existing.role=="administrator":
             existing.status="approved"; existing.active=True; db.commit()
 
+@app.on_event("startup")
+def backfill_review_queue():
+    """Add eligible historical screenings once, without changing clinical data."""
+    with SessionLocal() as db:
+        for screening in db.scalars(select(Screening).where(Screening.archived.is_(False))).all():
+            if db.scalar(select(ReviewCase).where(ReviewCase.screening_id==screening.screening_id)): continue
+            encounter=db.scalar(select(Encounter).where(Encounter.screening_id==screening.screening_id))
+            reasons=[]
+            if screening.disease not in {"hypertension","diabetes","malaria","tb"}: reasons.append("Module requires medical protocol review")
+            if screening.risk_level in {"High","Urgent"}: reasons.append(f"{screening.risk_level} priority screening signal")
+            if encounter and encounter.completion_status=="incomplete": reasons.append("Encounter is incomplete")
+            if screening.referred: reasons.append("Referral follow up requires review")
+            if not reasons or not encounter: continue
+            review_id=str(uuid.uuid4()); priority="immediate" if screening.risk_level=="Urgent" else "urgent" if screening.risk_level=="High" else "routine"; now=datetime.utcnow()
+            db.add(ReviewCase(review_id=review_id,screening_id=screening.screening_id,encounter_id=encounter.encounter_id,patient_code=screening.patient_code,disease=screening.disease,district=screening.district,facility=encounter.facility,priority=priority,status="awaiting_review",flag_reasons_json=json.dumps(reasons),follow_up_date=encounter.follow_up_date,created_by=screening.created_by or "system",created_at=now,updated_at=now))
+            db.add(ReviewEvent(review_id=review_id,actor="system",action="historical_case_flagged",details="; ".join(reasons),created_at=now))
+        db.commit()
+
 ROLES={"administrator","clinician","disease_control_officer","data_officer","field_worker"}
 REQUESTABLE_ROLES=ROLES-{"administrator"}
 STATUSES={"pending","approved","rejected","suspended"}
+REVIEW_CLASSES={"suspected","probable","confirmed","excluded","inconclusive"}
+REVIEW_ACTIONS={"repeat_assessment","request_laboratory_test","refer_to_facility","notify_disease_control","start_follow_up","close_case"}
+REVIEW_STATUSES={"awaiting_review","under_review","follow_up_required","closed"}
+CLINICALLY_REVIEWED_MODULES={"hypertension","diabetes","malaria","tb"}
 
 def clean(value): return str(value or "").strip()
 def valid_password(value):
     return len(value)>=12 and re.search(r"[A-Z]",value) and re.search(r"[a-z]",value) and re.search(r"\d",value)
 def audit(db,actor,action,target_type,target_id,details=""):
     db.add(AuditLog(actor=actor,action=action,target_type=target_type,target_id=str(target_id),details=details))
+
+def review_json(row,screening=None,encounter=None,events=None):
+    return {"review_id":row.review_id,"screening_id":row.screening_id,"encounter_id":row.encounter_id,"patient_code":row.patient_code,"disease":row.disease,"district":row.district,"facility":row.facility,"priority":row.priority,"status":row.status,"flag_reasons":json.loads(row.flag_reasons_json or "[]"),"assigned_to":row.assigned_to,"reviewer_classification":row.reviewer_classification,"recommended_action":row.recommended_action,"reviewer_notes":row.reviewer_notes,"follow_up_date":row.follow_up_date,"reviewed_by":row.reviewed_by,"reviewed_at":row.reviewed_at.isoformat() if row.reviewed_at else None,"created_by":row.created_by,"created_at":row.created_at.isoformat(),"screening":{"visit_date":screening.visit_date,"community":screening.community,"risk_level":screening.risk_level,"classification":screening.classification,"case_status":screening.case_status,"outcome":screening.outcome} if screening else None,"encounter":{"temperature_c":encounter.temperature_c,"pulse":encounter.pulse,"respiratory_rate":encounter.respiratory_rate,"oxygen_saturation":encounter.oxygen_saturation,"blood_pressure":f"{encounter.systolic}/{encounter.diastolic}" if encounter.systolic and encounter.diastolic else None,"bmi":encounter.bmi,"symptoms":json.loads(encounter.symptoms_json or "[]"),"notes":encounter.notes,"completion_status":encounter.completion_status} if encounter else None,"history":[{"actor":e.actor,"action":e.action,"details":e.details,"created_at":e.created_at.isoformat()} for e in (events or [])]}
+
+def review_flags(p,result):
+    reasons=[]
+    if p.disease not in CLINICALLY_REVIEWED_MODULES: reasons.append("Module requires medical protocol review")
+    if result.risk in {"High","Urgent"}: reasons.append(f"{result.risk} priority screening signal")
+    if p.completion_status=="incomplete": reasons.append("Encounter is incomplete")
+    if p.case_status=="confirmed" and not (p.lab_test_name and p.lab_result): reasons.append("Confirmed status has no laboratory result recorded")
+    if p.referred: reasons.append("Referral follow up requires review")
+    return reasons
 def user_json(user):
     return {"id":user.id,"username":user.username,"email":user.email,"full_name":user.full_name,"phone":user.phone,"staff_id":user.staff_id,"facility":user.facility,"district":user.district,"region":user.region,"role":user.role,"status":user.status,"active":user.active,"force_password_change":user.force_password_change,"last_login":user.last_login.isoformat() if user.last_login else None,"created_at":user.created_at.isoformat() if user.created_at else None}
 
@@ -168,8 +202,58 @@ def create_screening(p: ScreeningRequest,user:User=Depends(allow("administrator"
         db.add(LaboratoryTest(test_id=str(uuid.uuid4()),encounter_id=eid,patient_code=p.patient_code,test_name=p.lab_test_name,result=p.lab_result,result_unit=p.lab_result_unit,created_by=user.username))
     if p.referred and p.referral_destination:
         db.add(Referral(referral_id=str(uuid.uuid4()),screening_id=sid,patient_code=p.patient_code,destination=p.referral_destination,reason=p.referral_reason or d.recommendation,status="Pending",due_date=p.follow_up_date.isoformat() if p.follow_up_date else None,created_by=user.username))
+    flags=review_flags(p,d)
+    if flags:
+        review_id=str(uuid.uuid4()); priority="immediate" if d.risk=="Urgent" else "urgent" if d.risk=="High" else "routine"
+        db.add(ReviewCase(review_id=review_id,screening_id=sid,encounter_id=eid,patient_code=p.patient_code,disease=p.disease,district=p.district,facility=p.facility,priority=priority,status="awaiting_review",flag_reasons_json=json.dumps(flags),follow_up_date=p.follow_up_date.isoformat() if p.follow_up_date else None,created_by=user.username,created_at=now,updated_at=now))
+        db.add(ReviewEvent(review_id=review_id,actor="system",action="case_flagged",details="; ".join(flags),created_at=now))
     audit(db,user.username,"screening_created","screening",sid,p.disease); db.commit()
     return ScreeningResult(screening_id=sid,encounter_id=eid,disease=p.disease,risk_level=d.risk,classification=d.classification,recommendation=d.recommendation,score=d.score,bmi=d.bmi,disclaimer=DISCLAIMER,created_at=now)
+
+@app.get("/api/v1/reviews")
+def list_reviews(status:str|None=None,priority:str|None=None,disease:str|None=None,district:str|None=None,user:User=Depends(current_user),db:Session=Depends(get_db)):
+    stmt=select(ReviewCase).order_by(ReviewCase.created_at.desc()).limit(500)
+    if user.role=="field_worker": stmt=stmt.where(ReviewCase.created_by==user.username)
+    if status: stmt=stmt.where(ReviewCase.status==status)
+    if priority: stmt=stmt.where(ReviewCase.priority==priority)
+    if disease: stmt=stmt.where(ReviewCase.disease==disease)
+    if district: stmt=stmt.where(func.lower(ReviewCase.district)==district.lower())
+    rows=db.scalars(stmt).all()
+    return [review_json(r,db.scalar(select(Screening).where(Screening.screening_id==r.screening_id)),db.scalar(select(Encounter).where(Encounter.encounter_id==r.encounter_id))) for r in rows]
+
+@app.get("/api/v1/reviews/{review_id}")
+def get_review(review_id:str,user:User=Depends(current_user),db:Session=Depends(get_db)):
+    row=db.scalar(select(ReviewCase).where(ReviewCase.review_id==review_id))
+    if not row or (user.role=="field_worker" and row.created_by!=user.username): raise HTTPException(404,"Review case not found")
+    events=db.scalars(select(ReviewEvent).where(ReviewEvent.review_id==review_id).order_by(ReviewEvent.created_at.desc())).all()
+    return review_json(row,db.scalar(select(Screening).where(Screening.screening_id==row.screening_id)),db.scalar(select(Encounter).where(Encounter.encounter_id==row.encounter_id)),events)
+
+@app.patch("/api/v1/reviews/{review_id}")
+def decide_review(review_id:str,payload:dict,user:User=Depends(allow("administrator","clinician","disease_control_officer")),db:Session=Depends(get_db)):
+    row=db.scalar(select(ReviewCase).where(ReviewCase.review_id==review_id))
+    if not row: raise HTTPException(404,"Review case not found")
+    classification=clean(payload.get("classification")); action=clean(payload.get("recommended_action")); status=clean(payload.get("status"))
+    if classification not in REVIEW_CLASSES: raise HTTPException(422,"Select a valid reviewer classification")
+    if action not in REVIEW_ACTIONS: raise HTTPException(422,"Select a valid recommended action")
+    if status not in REVIEW_STATUSES: raise HTTPException(422,"Select a valid review status")
+    notes=clean(payload.get("notes"))
+    if len(notes)<5: raise HTTPException(422,"Add a brief review note")
+    row.reviewer_classification=classification; row.recommended_action=action; row.status=status; row.reviewer_notes=notes[:3000]; row.follow_up_date=payload.get("follow_up_date") or None; row.assigned_to=clean(payload.get("assigned_to")) or user.username; row.reviewed_by=user.username; row.reviewed_at=datetime.utcnow(); row.updated_at=datetime.utcnow()
+    screening=db.scalar(select(Screening).where(Screening.screening_id==row.screening_id))
+    if screening: screening.case_status=classification; screening.updated_at=datetime.utcnow()
+    details=f"{classification}; {action}; {status}"
+    db.add(ReviewEvent(review_id=review_id,actor=user.username,action="clinical_decision_recorded",details=details)); audit(db,user.username,"review_decided","review",review_id,details); db.commit()
+    return review_json(row,screening,db.scalar(select(Encounter).where(Encounter.encounter_id==row.encounter_id)))
+
+@app.patch("/api/v1/reviews/{review_id}/data-quality")
+def review_data_quality(review_id:str,payload:dict,user:User=Depends(allow("administrator","data_officer")),db:Session=Depends(get_db)):
+    row=db.scalar(select(ReviewCase).where(ReviewCase.review_id==review_id))
+    if not row: raise HTTPException(404,"Review case not found")
+    note=clean(payload.get("note"))
+    if len(note)<5: raise HTTPException(422,"Describe the data correction or validation")
+    if row.status=="awaiting_review": row.status="under_review"
+    row.updated_at=datetime.utcnow(); db.add(ReviewEvent(review_id=review_id,actor=user.username,action="data_quality_checked",details=note[:2000])); audit(db,user.username,"review_data_checked","review",review_id,note[:500]); db.commit()
+    return {"message":"Data quality note recorded without changing the clinical classification","status":row.status}
 @app.get("/api/v1/screenings")
 def list_screenings(limit:int=Query(100,ge=1,le=1000),patient_code:str|None=None,user:User=Depends(current_user),db:Session=Depends(get_db)):
     stmt=select(Screening).where(Screening.archived.is_(False)).order_by(Screening.created_at.desc()).limit(limit)

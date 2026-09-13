@@ -158,6 +158,39 @@ class Referral(Base):
     created_by: Mapped[str] = mapped_column(String(80))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
+class ReviewCase(Base):
+    __tablename__ = "review_cases"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    review_id: Mapped[str] = mapped_column(String(36), unique=True, index=True)
+    screening_id: Mapped[str] = mapped_column(String(36), unique=True, index=True)
+    encounter_id: Mapped[str] = mapped_column(String(36), index=True)
+    patient_code: Mapped[str] = mapped_column(String(64), index=True)
+    disease: Mapped[str] = mapped_column(String(50), index=True)
+    district: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    facility: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    priority: Mapped[str] = mapped_column(String(20), default="routine", index=True)
+    status: Mapped[str] = mapped_column(String(30), default="awaiting_review", index=True)
+    flag_reasons_json: Mapped[str] = mapped_column(Text, default="[]")
+    assigned_to: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    reviewer_classification: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    recommended_action: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    reviewer_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    follow_up_date: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    reviewed_by: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_by: Mapped[str] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+class ReviewEvent(Base):
+    __tablename__ = "review_events"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    review_id: Mapped[str] = mapped_column(String(36), index=True)
+    actor: Mapped[str] = mapped_column(String(80), index=True)
+    action: Mapped[str] = mapped_column(String(80))
+    details: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
 def init_db():
     Base.metadata.create_all(bind=engine)
     # create_all does not add columns to an existing table. This small, additive
