@@ -1,6 +1,6 @@
 import os
 from datetime import datetime
-from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, create_engine, inspect, text
+from sqlalchemy import Boolean, DateTime, Float, Integer, LargeBinary, String, Text, create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./healthsignal.db")
@@ -31,6 +31,83 @@ class Screening(Base):
     referred: Mapped[bool] = mapped_column(Boolean, default=False)
     latitude: Mapped[float | None] = mapped_column(Float, nullable=True)
     longitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_by: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    case_status: Mapped[str] = mapped_column(String(30), default="suspected", index=True)
+    outcome: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    archived: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+
+class Patient(Base):
+    __tablename__ = "patients"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    patient_code: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    sex: Mapped[str] = mapped_column(String(20))
+    date_of_birth: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    approximate_age: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    home_community: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    district: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    region: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    archived: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    created_by: Mapped[str] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+class Encounter(Base):
+    __tablename__ = "encounters"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    encounter_id: Mapped[str] = mapped_column(String(36), unique=True, index=True)
+    patient_code: Mapped[str] = mapped_column(String(64), index=True)
+    screening_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    visit_date: Mapped[str] = mapped_column(String(10), index=True)
+    facility: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    community: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    district: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    region: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    temperature_c: Mapped[float | None] = mapped_column(Float, nullable=True)
+    pulse: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    respiratory_rate: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    oxygen_saturation: Mapped[float | None] = mapped_column(Float, nullable=True)
+    systolic: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    diastolic: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    weight_kg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    height_cm: Mapped[float | None] = mapped_column(Float, nullable=True)
+    bmi: Mapped[float | None] = mapped_column(Float, nullable=True)
+    pregnant: Mapped[bool] = mapped_column(Boolean, default=False)
+    symptoms_json: Mapped[str] = mapped_column(Text, default="[]")
+    notes: Mapped[str] = mapped_column(Text, default="")
+    outcome: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    follow_up_date: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    completion_status: Mapped[str] = mapped_column(String(30), default="complete", index=True)
+    archived: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    created_by: Mapped[str] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+class LaboratoryTest(Base):
+    __tablename__ = "laboratory_tests"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    test_id: Mapped[str] = mapped_column(String(36), unique=True, index=True)
+    encounter_id: Mapped[str] = mapped_column(String(36), index=True)
+    patient_code: Mapped[str] = mapped_column(String(64), index=True)
+    test_name: Mapped[str] = mapped_column(String(100), index=True)
+    result: Mapped[str] = mapped_column(String(120))
+    result_unit: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    result_status: Mapped[str] = mapped_column(String(30), default="available")
+    tested_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_by: Mapped[str] = mapped_column(String(80))
+
+class Attachment(Base):
+    __tablename__ = "attachments"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    attachment_id: Mapped[str] = mapped_column(String(36), unique=True, index=True)
+    encounter_id: Mapped[str] = mapped_column(String(36), index=True)
+    patient_code: Mapped[str] = mapped_column(String(64), index=True)
+    filename: Mapped[str] = mapped_column(String(180))
+    content_type: Mapped[str] = mapped_column(String(80))
+    content: Mapped[bytes] = mapped_column(LargeBinary)
+    consent_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_by: Mapped[str] = mapped_column(String(80))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 class User(Base):
@@ -98,6 +175,12 @@ def init_db():
         for name,sql_type in additions.items():
             if name not in columns:
                 conn.execute(text(f"ALTER TABLE users ADD COLUMN {name} {sql_type}"))
+    screening_columns={c["name"] for c in inspect(engine).get_columns("screenings")}
+    screening_additions={"updated_at":"TIMESTAMP","created_by":"VARCHAR(80)","case_status":"VARCHAR(30) DEFAULT 'suspected'","outcome":"VARCHAR(120)","archived":"BOOLEAN DEFAULT FALSE"}
+    with engine.begin() as conn:
+        for name,sql_type in screening_additions.items():
+            if name not in screening_columns:
+                conn.execute(text(f"ALTER TABLE screenings ADD COLUMN {name} {sql_type}"))
 def get_db():
     db = SessionLocal()
     try: yield db
