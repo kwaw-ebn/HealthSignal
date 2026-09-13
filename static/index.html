@@ -4,8 +4,10 @@
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#075968"><title>HealthSignal | Public Health Decision Support</title>
   <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="/static/auth.css">
 </head>
 <body>
+  <div id="loginGate" class="login-gate"><form id="loginForm" class="login-card"><img src="/static/logo.jpg" alt="HealthSignal logo"><span class="eyebrow">SECURE FIELD WORKSPACE</span><h1>Welcome to HealthSignal</h1><p>Sign in with your authorized account.</p><label>Username<input id="loginUser" autocomplete="username" required></label><label>Password<input id="loginPassword" type="password" autocomplete="current-password" required></label><button class="primary" type="submit">Sign in securely</button><small id="loginError"></small><div class="login-credit">Created by Ebenezer Kwaw</div></form></div>
   <aside class="sidebar">
     <a class="brand" href="#"><img src="/static/logo.jpg" alt="HealthSignal logo"><span><b>HealthSignal</b><small>Public Health Intelligence</small></span></a>
     <nav>
@@ -14,7 +16,7 @@
       <button class="nav" data-view="records">≡ <span>Records</span></button>
       <button class="nav" data-view="about">ⓘ <span>About</span></button>
     </nav>
-    <div class="creator"><span>Created by</span><strong>Ebenezer Kwaw</strong><small>Public Health and AI</small></div>
+    <div class="creator"><span id="signedInUser">Authorized user</span><button id="logout" class="logout">Sign out</button><strong>Ebenezer Kwaw</strong><small>Creator · Public Health and AI</small></div>
   </aside>
   <header class="mobile-head"><button id="menu" aria-label="Open menu">☰</button><img src="/static/logo.jpg" alt=""><b>HealthSignal</b></header>
   <main>
