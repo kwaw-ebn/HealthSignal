@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: healthsignal
+    runtime: python
+    plan: free
+    region: oregon
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn healthsignal_api.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      - key: DATABASE_URL
+        value: sqlite:////tmp/healthsignal.db
+      - key: CORS_ORIGINS
+        value: "*"
