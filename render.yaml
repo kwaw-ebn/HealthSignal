@@ -3,7 +3,7 @@ services:
     name: healthsignal
     runtime: python
     plan: free
-    region: oregon
+    region: frankfurt
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn healthsignal_api.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
@@ -12,6 +12,12 @@ services:
       - key: PYTHON_VERSION
         value: 3.12.7
       - key: DATABASE_URL
-        value: sqlite:////tmp/healthsignal.db
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: ADMIN_USERNAME
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
       - key: CORS_ORIGINS
-        value: "*"
+        value: https://healthsignal.onrender.com
