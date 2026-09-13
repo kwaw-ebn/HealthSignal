@@ -263,6 +263,13 @@ class NetworkReferral(Base):
     reason: Mapped[str] = mapped_column(Text)
     urgency: Mapped[str] = mapped_column(String(20), default="routine", index=True)
     clinical_summary: Mapped[str] = mapped_column(Text)
+    receiving_department: Mapped[str] = mapped_column(String(60), default="Consulting Room")
+    consent_type: Mapped[str] = mapped_column(String(40), default="patient")
+    consent_scope_json: Mapped[str] = mapped_column(Text, default='["care_summary"]')
+    consent_recorded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    consent_revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    access_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_accessed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     status: Mapped[str] = mapped_column(String(30), default="sent", index=True)
     consent_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
     accepted_by: Mapped[str | None] = mapped_column(String(80), nullable=True)
@@ -281,6 +288,21 @@ class NetworkReferralEvent(Base):
     facility: Mapped[str] = mapped_column(String(160))
     action: Mapped[str] = mapped_column(String(50))
     details: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+class ReferralAccessGrant(Base):
+    __tablename__ = "referral_access_grants"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    grant_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    referral_id: Mapped[str] = mapped_column(String(36), index=True)
+    username: Mapped[str] = mapped_column(String(80), index=True)
+    facility: Mapped[str] = mapped_column(String(160), index=True)
+    department: Mapped[str] = mapped_column(String(60))
+    purpose: Mapped[str] = mapped_column(String(80))
+    access_reason: Mapped[str] = mapped_column(Text)
+    emergency: Mapped[bool] = mapped_column(Boolean, default=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    revoked: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
 class LocationAccessGrant(Base):
@@ -328,6 +350,19 @@ def init_db():
             for name,sql_type in facility_additions.items():
                 if name not in facility_columns:
                     conn.execute(text(f"ALTER TABLE facilities ADD COLUMN {name} {sql_type}"))
+    if inspect(engine).has_table("network_referrals"):
+        referral_columns={c["name"] for c in inspect(engine).get_columns("network_referrals")}
+        referral_additions={
+            "receiving_department":"VARCHAR(60) DEFAULT 'Consulting Room'",
+            "consent_type":"VARCHAR(40) DEFAULT 'patient'",
+            "consent_scope_json":"TEXT DEFAULT '[\"care_summary\"]'",
+            "consent_recorded_at":"TIMESTAMP", "consent_revoked_at":"TIMESTAMP",
+            "access_count":"INTEGER DEFAULT 0", "last_accessed_at":"TIMESTAMP"
+        }
+        with engine.begin() as conn:
+            for name,sql_type in referral_additions.items():
+                if name not in referral_columns:
+                    conn.execute(text(f"ALTER TABLE network_referrals ADD COLUMN {name} {sql_type}"))
 def get_db():
     db = SessionLocal()
     try: yield db

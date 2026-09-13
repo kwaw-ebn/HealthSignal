@@ -14,6 +14,11 @@ A Ghana focused field screening, early warning and public health decision suppor
 - Records, OPD triage, consultation, laboratory and pharmacy workflow
 - Multi facility patient journeys and department queues
 - Controlled inter facility referral handover using an authorized account, patient ID, time limited referral code and documented access reason
+- Patient-authorized selective disclosure of demographics, care summary, allergies, vital signs, laboratory results and medicines
+- Receiving-department assignment and configurable 24 hour, 72 hour or seven day referral validity
+- Thirty-minute audited clinical access sessions; patient ID alone cannot reveal another facility's record
+- Consent withdrawal that revokes referral access and controlled emergency access with mandatory justification
+- Referral access history for privacy review and accountability
 - Referral acceptance, arrival, care and completion feedback states
 - Optional facility geofence with browser location verification and 20 minute Care Network access grants
 - Location verification denials and approvals recorded in the security audit log

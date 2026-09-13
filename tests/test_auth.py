@@ -102,7 +102,7 @@ def test_care_network_patient_journey_and_controlled_referral_access():
         consultation=client.post(f"/api/v1/care-network/episodes/{episode_id}/consultation",headers=source_headers,json={"assessment":"Fever requiring malaria test","plan":"Request RDT and review result","allergies":"None known","disposition":"Laboratory"})
         assert consultation.status_code==201
         assert client.post(f"/api/v1/care-network/episodes/{episode_id}/laboratory",headers=source_headers,json={"test_name":"Malaria RDT","result":"Negative","next_department":"Consulting Room"}).status_code==201
-        referral=client.post("/api/v1/care-network/referrals",headers=source_headers,json={"episode_id":episode_id,"destination_facility":"Nsaba Health Centre","reason":"Further clinical assessment","clinical_summary":"Fever assessed, malaria RDT negative; continued evaluation requested.","urgency":"urgent","consent_confirmed":True})
+        referral=client.post("/api/v1/care-network/referrals",headers=source_headers,json={"episode_id":episode_id,"destination_facility":"Nsaba Health Centre","receiving_department":"Consulting Room","reason":"Further clinical assessment","clinical_summary":"Fever assessed, malaria RDT negative; continued evaluation requested.","urgency":"urgent","consent_type":"patient","consent_scopes":["demographics","care_summary","allergies","vitals","laboratory"],"validity_hours":72,"consent_confirmed":True})
         assert referral.status_code==201
         access_code=referral.json()["access_code"]
 
@@ -119,13 +119,38 @@ def test_care_network_patient_journey_and_controlled_referral_access():
         shared=client.post("/api/v1/care-network/referrals/access",headers=receiver_headers,json={"patient_code":patient_code,"access_code":access_code,"access_reason":"Patient arrived for referred care"})
         assert shared.status_code==200
         assert shared.json()["referral"]["clinical_summary"].startswith("Fever assessed")
-        assert any(event["event_type"]=="triage" for event in shared.json()["timeline"])
+        assert shared.json()["shared_scopes"]==["allergies","care_summary","demographics","laboratory","vitals"]
+        assert "medications" not in shared.json()
+        assert shared.json()["vitals"]
+        assert shared.json()["access_session"]["token"]
         referral_id=shared.json()["referral"]["referral_id"]
+        history=client.get(f"/api/v1/care-network/referrals/{referral_id}/access-history",headers=receiver_headers)
+        assert history.status_code==200 and history.json()[0]["purpose"]=="referral_treatment"
         assert client.patch(f"/api/v1/care-network/referrals/{referral_id}",headers=receiver_headers,json={"status":"accepted","details":"Referral accepted"}).status_code==200
         assert client.patch(f"/api/v1/care-network/referrals/{referral_id}",headers=receiver_headers,json={"status":"arrived","details":"Patient arrived"}).status_code==200
         assert client.patch(f"/api/v1/care-network/referrals/{referral_id}",headers=receiver_headers,json={"status":"in_care","details":"Clinical review started"}).status_code==200
         completed=client.patch(f"/api/v1/care-network/referrals/{referral_id}",headers=receiver_headers,json={"status":"completed","details":"Assessment completed and feedback returned."})
         assert completed.status_code==200 and completed.json()["status"]=="completed"
+
+def test_referral_emergency_access_and_consent_revocation():
+    with TestClient(app) as client:
+        source_headers=admin_headers(client)
+        episode=client.post("/api/v1/care-network/episodes",headers=source_headers,json={"age":40,"sex":"Male","community":"Nsaba","chief_complaint":"Urgent assessment"}).json()
+        referral=client.post("/api/v1/care-network/referrals",headers=source_headers,json={"episode_id":episode["episode_id"],"destination_facility":"Referral Hospital","reason":"Urgent specialist review","clinical_summary":"Patient requires timely specialist assessment.","urgency":"emergency","consent_type":"patient","consent_scopes":["care_summary"],"validity_hours":24,"consent_confirmed":True}).json()
+        password=secrets.token_urlsafe(18)+"Aa1"
+        account={"username":"emergency.doctor","email":"doctor@example.com","full_name":"Emergency Doctor","phone":"0240000002","staff_id":"GHS-003","facility":"Referral Hospital","district":"Agona East","region":"Central","role":"clinician","password":password,"terms_accepted":True}
+        assert client.post("/api/v1/auth/register",json=account).status_code==201
+        user_id=next(u["id"] for u in client.get("/api/v1/users",headers=source_headers).json() if u["username"]=="emergency.doctor")
+        assert client.patch(f"/api/v1/users/{user_id}/status",headers=source_headers,json={"status":"approved","role":"clinician"}).status_code==200
+        token=client.post("/api/v1/auth/login",json={"username":"emergency.doctor","password":password}).json()["access_token"]
+        receiver_headers={"Authorization":f"Bearer {token}"}
+        emergency=client.post("/api/v1/care-network/referrals/emergency-access",headers=receiver_headers,json={"patient_code":episode["patient_code"],"access_reason":"Patient arrived unconscious and essential history is required now","emergency_confirmed":True})
+        assert emergency.status_code==200 and emergency.json()["emergency_access"] is True
+        assert emergency.json()["shared_scopes"]==["allergies","care_summary","demographics"]
+        revoked=client.post(f"/api/v1/care-network/referrals/{referral['referral_id']}/revoke-consent",headers=source_headers,json={"reason":"Patient withdrew authorization"})
+        assert revoked.status_code==200
+        denied=client.post("/api/v1/care-network/referrals/access",headers=receiver_headers,json={"patient_code":episode["patient_code"],"access_code":referral["access_code"],"access_reason":"Routine referral treatment"})
+        assert denied.status_code==403
 
 def test_care_network_geofence_requires_short_location_grant():
     with TestClient(app) as client:

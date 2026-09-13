@@ -20,6 +20,7 @@ from .database import (
     MedicationOrder,
     NetworkReferral,
     NetworkReferralEvent,
+    ReferralAccessGrant,
     Patient,
     User,
     get_db,
@@ -31,6 +32,8 @@ CARE_ROLES = {"administrator", "clinician", "nutritionist_dietitian", "field_off
 CLINICAL_ROLES = {"administrator", "clinician", "nutritionist_dietitian"}
 REFERRAL_STATES = {"sent", "accepted", "arrived", "in_care", "completed", "redirected"}
 DEPARTMENTS = {"Records", "OPD", "Consulting Room", "Laboratory", "Pharmacy", "RCH", "Theatre", "Finance"}
+SHAREABLE_SCOPES = {"demographics", "care_summary", "allergies", "vitals", "laboratory", "medications"}
+REFERRAL_ACCESS_ROLES = {"administrator", "clinician", "nutritionist_dietitian"}
 
 
 def clean(value, limit=3000):
@@ -113,6 +116,11 @@ def referral_json(row, include_summary=False):
         "urgency": row.urgency,
         "status": row.status,
         "consent_confirmed": row.consent_confirmed,
+        "consent_type": row.consent_type,
+        "consent_scopes": json.loads(row.consent_scope_json or '[]'),
+        "consent_revoked": bool(row.consent_revoked_at),
+        "receiving_department": row.receiving_department,
+        "access_count": row.access_count or 0,
         "accepted_by": row.accepted_by,
         "feedback": row.feedback,
         "expires_at": row.expires_at.isoformat(),
@@ -122,6 +130,39 @@ def referral_json(row, include_summary=False):
     if include_summary:
         data["clinical_summary"] = row.clinical_summary
     return data
+
+
+def referral_packet(db, row, user, reason, emergency=False):
+    scopes = {"demographics", "care_summary", "allergies"} if emergency else set(json.loads(row.consent_scope_json or '[]'))
+    patient = db.scalar(select(Patient).where(Patient.patient_code == row.patient_code))
+    events = db.scalars(select(CareEvent).where(CareEvent.episode_id == row.episode_id, CareEvent.facility == row.source_facility).order_by(CareEvent.created_at)).all()
+    packet = {"referral": referral_json(row, "care_summary" in scopes), "shared_scopes": sorted(scopes), "emergency_access": emergency}
+    if "demographics" in scopes:
+        packet["patient"] = {"patient_code": row.patient_code, "sex": patient.sex if patient else None, "age": patient.approximate_age if patient else None}
+    else:
+        packet["patient"] = {"patient_code": row.patient_code}
+    if "vitals" in scopes:
+        packet["vitals"] = [{"summary": e.summary, "recorded_at": e.created_at.isoformat()} for e in events if e.event_type == "triage"][-1:]
+    if "allergies" in scopes:
+        allergies=[]
+        for e in events:
+            if e.event_type == "consultation":
+                data=json.loads(e.clinical_data_json or '{}')
+                if data.get("allergies"): allergies.append(data["allergies"])
+        packet["allergies"] = allergies[-1:] or ["Not recorded"]
+    if "laboratory" in scopes:
+        labs=db.scalars(select(LaboratoryTest).where(LaboratoryTest.encounter_id == row.episode_id).order_by(LaboratoryTest.tested_at)).all()
+        packet["laboratory_results"]=[{"test_name":x.test_name,"result":x.result,"unit":x.result_unit,"tested_at":x.tested_at.isoformat()} for x in labs]
+        if not packet["laboratory_results"]:
+            packet["laboratory_results"]=[{"test_name":e.summary,"result":"See handover","unit":"","tested_at":e.created_at.isoformat()} for e in events if e.event_type == "laboratory_result"]
+    if "medications" in scopes:
+        meds=db.scalars(select(MedicationOrder).where(MedicationOrder.episode_id == row.episode_id).order_by(MedicationOrder.created_at)).all()
+        packet["medications"]=[{"medicine":x.medicine,"instructions":x.instructions,"status":x.status} for x in meds]
+    raw=secrets.token_urlsafe(32); expires=datetime.utcnow()+timedelta(minutes=30)
+    db.add(ReferralAccessGrant(grant_hash=hashlib.sha256(raw.encode()).hexdigest(),referral_id=row.referral_id,username=user.username,facility=facility_for(user),department=row.receiving_department,purpose="emergency_treatment" if emergency else "referral_treatment",access_reason=reason,emergency=emergency,expires_at=expires))
+    row.access_count=(row.access_count or 0)+1; row.last_accessed_at=datetime.utcnow()
+    packet["access_session"]={"token":raw,"expires_at":expires.isoformat(),"notice":"Access is limited to this referral package and is fully audited."}
+    return packet
 
 
 def require_local_episode(db, episode_id, user):
@@ -356,8 +397,17 @@ def create_network_referral(payload: dict, user: User = Depends(care_allow("admi
     if len(reason) < 3 or len(summary) < 10: raise HTTPException(422, "Referral reason and clinical summary are required")
     if urgency not in {"routine", "urgent", "emergency"}: raise HTTPException(422, "Invalid referral urgency")
     if payload.get("consent_confirmed") is not True: raise HTTPException(422, "Patient consent or an approved lawful basis must be confirmed")
+    scopes={clean(x,40) for x in payload.get("consent_scopes", [])} & SHAREABLE_SCOPES
+    if "care_summary" not in scopes: scopes.add("care_summary")
+    consent_type=clean(payload.get("consent_type"),40) or "patient"
+    if consent_type not in {"patient","guardian","lawful_basis"}: raise HTTPException(422,"Invalid consent type")
+    receiving_department=clean(payload.get("receiving_department"),60) or "Consulting Room"
+    if receiving_department not in DEPARTMENTS: raise HTTPException(422,"Invalid receiving department")
+    try: validity_hours=int(payload.get("validity_hours",168))
+    except (TypeError,ValueError): raise HTTPException(422,"Invalid referral validity")
+    if validity_hours not in {24,72,168}: raise HTTPException(422,"Referral validity must be 24 hours, 72 hours or 7 days")
     access_code = secrets.token_hex(3).upper()
-    row = NetworkReferral(referral_id=str(uuid.uuid4()), episode_id=episode.episode_id, patient_code=episode.patient_code, source_facility=episode.facility, destination_facility=destination, access_code_hash=hashlib.sha256(access_code.encode()).hexdigest(), reason=reason, urgency=urgency, clinical_summary=summary, status="sent", consent_confirmed=True, expires_at=datetime.utcnow()+timedelta(days=7), created_by=user.username)
+    row = NetworkReferral(referral_id=str(uuid.uuid4()), episode_id=episode.episode_id, patient_code=episode.patient_code, source_facility=episode.facility, destination_facility=destination, access_code_hash=hashlib.sha256(access_code.encode()).hexdigest(), reason=reason, urgency=urgency, clinical_summary=summary, status="sent", consent_confirmed=True, consent_type=consent_type, consent_scope_json=json.dumps(sorted(scopes)), consent_recorded_at=datetime.utcnow(), receiving_department=receiving_department, expires_at=datetime.utcnow()+timedelta(hours=validity_hours), created_by=user.username)
     db.add(row); db.add(NetworkReferralEvent(referral_id=row.referral_id, actor=user.username, facility=episode.facility, action="sent", details=destination)); episode.status = "referred"; episode.assigned_department = "Referral"; episode.updated_at = datetime.utcnow()
     audit(db, user, "network_referral_sent", "network_referral", row.referral_id, f"{episode.facility} to {destination}"); db.commit()
     return {**referral_json(row, True), "access_code": access_code, "access_code_notice": "Share this time limited code with the patient or authorized receiving team. It will not be displayed again."}
@@ -373,18 +423,53 @@ def list_network_referrals(user: User = Depends(care_user), db: Session = Depend
 @router.post("/referrals/access")
 def access_referral(payload: dict, user: User = Depends(care_user), db: Session = Depends(get_db)):
     require_care_role(user); facility = facility_for(user)
+    if user.role not in REFERRAL_ACCESS_ROLES: raise HTTPException(403,"Your role cannot open a clinical referral handover")
     patient_code, access_code, reason = clean(payload.get("patient_code"), 64).upper(), clean(payload.get("access_code"), 20).upper(), clean(payload.get("access_reason"), 500)
     if len(reason) < 5: raise HTTPException(422, "State why this record is being accessed")
     row = db.scalar(select(NetworkReferral).where(NetworkReferral.patient_code == patient_code, NetworkReferral.destination_facility == facility, NetworkReferral.status.in_(["sent", "accepted", "arrived", "in_care"])).order_by(NetworkReferral.created_at.desc()))
     valid = row and secrets.compare_digest(row.access_code_hash, hashlib.sha256(access_code.encode()).hexdigest())
-    if not valid or row.expires_at < datetime.utcnow():
+    if not valid or row.expires_at < datetime.utcnow() or row.consent_revoked_at is not None:
         audit(db, user, "network_referral_access_denied", "patient", patient_code, reason); db.commit()
         raise HTTPException(403, "Referral details could not be verified")
-    events = db.scalars(select(CareEvent).where(CareEvent.patient_code == patient_code, CareEvent.facility.in_([row.source_facility, row.destination_facility])).order_by(CareEvent.created_at)).all()
-    labs = db.scalars(select(LaboratoryTest).where(LaboratoryTest.patient_code == patient_code).order_by(LaboratoryTest.tested_at)).all()
-    patient = db.scalar(select(Patient).where(Patient.patient_code == patient_code))
-    audit(db, user, "network_referral_record_accessed", "network_referral", row.referral_id, reason); db.commit()
-    return {"referral": referral_json(row, True), "patient":{"patient_code":patient.patient_code,"sex":patient.sex,"age":patient.approximate_age} if patient else {"patient_code":patient_code}, "timeline":[{"department":event.department,"event_type":event.event_type,"summary":event.summary,"facility":event.facility,"created_at":event.created_at.isoformat()} for event in events], "laboratory_results":[{"test_name":lab.test_name,"result":lab.result,"unit":lab.result_unit,"tested_at":lab.tested_at.isoformat()} for lab in labs]}
+    packet=referral_packet(db,row,user,reason)
+    audit(db, user, "network_referral_record_accessed", "network_referral", row.referral_id, f"{reason}; scopes={','.join(packet['shared_scopes'])}"); db.commit()
+    return packet
+
+
+@router.post("/referrals/emergency-access")
+def emergency_referral_access(payload: dict, user: User = Depends(care_allow("administrator","clinician")), db: Session = Depends(get_db)):
+    facility=facility_for(user); patient_code=clean(payload.get("patient_code"),64).upper(); reason=clean(payload.get("access_reason"),500)
+    if payload.get("emergency_confirmed") is not True or len(reason)<20: raise HTTPException(422,"Confirm the emergency and provide a detailed clinical justification")
+    row=db.scalar(select(NetworkReferral).where(NetworkReferral.patient_code==patient_code,NetworkReferral.destination_facility==facility).order_by(NetworkReferral.created_at.desc()))
+    if not row: audit(db,user,"emergency_referral_access_denied","patient",patient_code,reason); db.commit(); raise HTTPException(404,"No referral addressed to this facility")
+    packet=referral_packet(db,row,user,reason,True)
+    db.add(NetworkReferralEvent(referral_id=row.referral_id,actor=user.username,facility=facility,action="emergency_access",details=reason))
+    audit(db,user,"emergency_referral_access_granted","network_referral",row.referral_id,reason); db.commit()
+    return packet
+
+
+@router.post("/referrals/{referral_id}/revoke-consent")
+def revoke_referral_consent(referral_id: str, payload: dict, user: User = Depends(care_allow("administrator","clinician")), db: Session = Depends(get_db)):
+    row=db.scalar(select(NetworkReferral).where(NetworkReferral.referral_id==referral_id))
+    if not row: raise HTTPException(404,"Referral not found")
+    if user.role!="administrator" and row.source_facility.casefold()!=facility_for(user).casefold(): raise HTTPException(403,"Only the referring facility can record consent withdrawal")
+    reason=clean(payload.get("reason"),500)
+    if len(reason)<5: raise HTTPException(422,"Record the reason for consent withdrawal")
+    row.consent_revoked_at=datetime.utcnow()
+    for grant in db.scalars(select(ReferralAccessGrant).where(ReferralAccessGrant.referral_id==referral_id)).all(): grant.revoked=True
+    db.add(NetworkReferralEvent(referral_id=referral_id,actor=user.username,facility=facility_for(user),action="consent_revoked",details=reason)); audit(db,user,"referral_consent_revoked","network_referral",referral_id,reason); db.commit()
+    return {"referral_id":referral_id,"consent_revoked":True}
+
+
+@router.get("/referrals/{referral_id}/access-history")
+def referral_access_history(referral_id: str, user: User = Depends(care_allow("administrator","clinician")), db: Session = Depends(get_db)):
+    row=db.scalar(select(NetworkReferral).where(NetworkReferral.referral_id==referral_id))
+    if not row: raise HTTPException(404,"Referral not found")
+    facility=facility_for(user)
+    if user.role!="administrator" and facility.casefold() not in {row.source_facility.casefold(),row.destination_facility.casefold()}: raise HTTPException(403,"This referral belongs to another care network")
+    grants=db.scalars(select(ReferralAccessGrant).where(ReferralAccessGrant.referral_id==referral_id).order_by(ReferralAccessGrant.created_at.desc())).all()
+    audit(db,user,"referral_access_history_viewed","network_referral",referral_id); db.commit()
+    return [{"username":g.username,"facility":g.facility,"department":g.department,"purpose":g.purpose,"reason":g.access_reason,"emergency":g.emergency,"created_at":g.created_at.isoformat(),"expires_at":g.expires_at.isoformat()} for g in grants]
 
 
 @router.patch("/referrals/{referral_id}")
