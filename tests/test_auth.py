@@ -27,6 +27,16 @@ def admin_headers(client):
     response=client.post("/api/v1/auth/login",json={"username":"test.admin","password":ADMIN_TEST_PASSWORD})
     return {"Authorization":f"Bearer {response.json()['access_token']}"}
 
+def approved_role_headers(client, admin, role, suffix):
+    password=secrets.token_urlsafe(18)+"Aa1"
+    username=f"{role}.{suffix}"
+    account={"username":username,"email":f"{username}@example.com","full_name":role.replace('_',' ').title(),"phone":"0240000099","staff_id":f"GHS-{suffix}","facility":"HealthSignal Demonstration Hospital","district":"Agona East","region":"Central","role":role,"password":password,"terms_accepted":True}
+    assert client.post("/api/v1/auth/register",json=account).status_code==201
+    user_id=next(u["id"] for u in client.get("/api/v1/users",headers=admin).json() if u["username"]==username)
+    assert client.patch(f"/api/v1/users/{user_id}/status",headers=admin,json={"status":"approved","role":role}).status_code==200
+    token=client.post("/api/v1/auth/login",json={"username":username,"password":password}).json()["access_token"]
+    return {"Authorization":f"Bearer {token}"}
+
 def test_registration_requires_approval():
     with TestClient(app) as client:
         assert client.post("/api/v1/auth/register",json=REGISTRATION).status_code==201
@@ -168,3 +178,32 @@ def test_care_network_geofence_requires_short_location_grant():
         assert allowed.status_code==200
         wrong_grant=client.get("/api/v1/care-network/overview",headers={**headers,"X-Care-Access":"not-a-valid-grant"})
         assert wrong_grant.status_code==403
+
+def test_department_accounts_have_separate_least_privilege_workspaces():
+    with TestClient(app) as client:
+        admin=admin_headers(client)
+        client.put("/api/v1/care-network/security/config",headers=admin,json={"facility":"HealthSignal Demonstration Hospital","latitude":5.6037,"longitude":-0.1870,"allowed_radius_m":250,"geofence_enabled":False})
+        records=approved_role_headers(client,admin,"records_officer","101")
+        opd=approved_role_headers(client,admin,"opd_nurse","102")
+        laboratory=approved_role_headers(client,admin,"laboratory_officer","103")
+        pharmacy=approved_role_headers(client,admin,"pharmacist","104")
+
+        episode=client.post("/api/v1/care-network/episodes",headers=records,json={"age":31,"sex":"Female","community":"Duakwa","chief_complaint":"Fever"})
+        assert episode.status_code==201
+        episode_id=episode.json()["episode_id"]
+        assert client.post(f"/api/v1/care-network/episodes/{episode_id}/triage",headers=records,json={"pulse":80}).status_code==403
+
+        assert client.post(f"/api/v1/care-network/episodes/{episode_id}/triage",headers=opd,json={"temperature_c":37.8,"pulse":88}).status_code==201
+        assert client.post("/api/v1/care-network/episodes",headers=opd,json={"age":20,"sex":"Male","chief_complaint":"Test"}).status_code==403
+        assert client.post(f"/api/v1/care-network/episodes/{episode_id}/laboratory",headers=opd,json={"test_name":"RDT","result":"Negative"}).status_code==403
+
+        assert client.post(f"/api/v1/care-network/episodes/{episode_id}/consultation",headers=admin,json={"assessment":"Test requested","plan":"Laboratory review","disposition":"Laboratory"}).status_code==201
+        assert client.post(f"/api/v1/care-network/episodes/{episode_id}/laboratory",headers=laboratory,json={"test_name":"Malaria RDT","result":"Negative"}).status_code==201
+        assert client.post(f"/api/v1/care-network/episodes/{episode_id}/triage",headers=laboratory,json={"pulse":80}).status_code==403
+
+        assert client.post(f"/api/v1/care-network/episodes/{episode_id}/medications",headers=admin,json={"medicine":"Paracetamol","instructions":"Use as prescribed"}).status_code==201
+        queue=client.get("/api/v1/care-network/medications",headers=pharmacy)
+        assert queue.status_code==200 and queue.json()
+        order_id=queue.json()[0]["order_id"]
+        assert client.patch(f"/api/v1/care-network/medications/{order_id}/dispense",headers=pharmacy).status_code==200
+        assert client.get("/api/v1/care-network/medications",headers=opd).status_code==403

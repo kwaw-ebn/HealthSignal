@@ -52,7 +52,7 @@ def backfill_review_queue():
             db.add(ReviewEvent(review_id=review_id,actor="system",action="historical_case_flagged",details="; ".join(reasons),created_at=now))
         db.commit()
 
-ROLES={"administrator","clinician","nutritionist_dietitian","disease_control_officer","field_officer","data_officer"}
+ROLES={"administrator","clinician","nutritionist_dietitian","disease_control_officer","field_officer","data_officer","pharmacist","laboratory_officer","opd_nurse","records_officer"}
 REQUESTABLE_ROLES=ROLES-{"administrator"}
 STATUSES={"pending","approved","rejected","suspended"}
 REVIEW_CLASSES={"suspected","probable","confirmed","excluded","inconclusive"}
@@ -62,8 +62,8 @@ CLINICALLY_REVIEWED_MODULES={"hypertension","diabetes","malaria","tb"}
 ALL_MODULES={"hypertension","diabetes","malaria","tb","maternal_risk","childhood_malnutrition","anaemia_pregnancy","hiv_linkage","cholera_diarrhoea","measles","meningitis","acute_respiratory_infection","hepatitis","mental_health","other_ncd"}
 NUTRITION_MODULES={"childhood_malnutrition","anaemia_pregnancy","hypertension","diabetes","other_ncd"}
 PUBLIC_HEALTH_MODULES={"malaria","tb","hiv_linkage","cholera_diarrhoea","measles","meningitis","acute_respiratory_infection","hepatitis"}
-ROLE_MODULES={"administrator":ALL_MODULES,"clinician":ALL_MODULES,"nutritionist_dietitian":NUTRITION_MODULES,"disease_control_officer":PUBLIC_HEALTH_MODULES,"field_officer":ALL_MODULES,"data_officer":set()}
-ROLE_VIEWS={"administrator":["care-network","screening","dashboard","surveillance","records","referrals","reviews","users","account","about"],"clinician":["care-network","screening","dashboard","records","referrals","reviews","account","about"],"nutritionist_dietitian":["care-network","screening","dashboard","records","referrals","reviews","account","about"],"disease_control_officer":["screening","dashboard","surveillance","records","referrals","reviews","account","about"],"field_officer":["care-network","screening","dashboard","records","referrals","reviews","account","about"],"data_officer":["care-network","dashboard","surveillance","records","reviews","account","about"]}
+ROLE_MODULES={"administrator":ALL_MODULES,"clinician":ALL_MODULES,"nutritionist_dietitian":NUTRITION_MODULES,"disease_control_officer":PUBLIC_HEALTH_MODULES,"field_officer":ALL_MODULES,"opd_nurse":ALL_MODULES,"data_officer":set(),"pharmacist":set(),"laboratory_officer":set(),"records_officer":set()}
+ROLE_VIEWS={"administrator":["care-network","screening","dashboard","surveillance","records","referrals","reviews","users","account","about"],"clinician":["care-network","screening","dashboard","records","referrals","reviews","account","about"],"nutritionist_dietitian":["care-network","screening","dashboard","records","referrals","reviews","account","about"],"disease_control_officer":["screening","dashboard","surveillance","records","referrals","reviews","account","about"],"field_officer":["screening","dashboard","records","referrals","reviews","account","about"],"opd_nurse":["care-network","screening","dashboard","records","referrals","reviews","account","about"],"records_officer":["care-network","account","about"],"laboratory_officer":["care-network","account","about"],"pharmacist":["care-network","account","about"],"data_officer":["dashboard","surveillance","records","reviews","account","about"]}
 
 def clean(value): return str(value or "").strip()
 def valid_password(value):

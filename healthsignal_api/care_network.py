@@ -28,7 +28,7 @@ from .database import (
 
 router = APIRouter(prefix="/api/v1/care-network", tags=["Care Network"])
 
-CARE_ROLES = {"administrator", "clinician", "nutritionist_dietitian", "field_officer", "data_officer"}
+CARE_ROLES = {"administrator", "clinician", "nutritionist_dietitian", "opd_nurse", "records_officer", "laboratory_officer", "pharmacist"}
 CLINICAL_ROLES = {"administrator", "clinician", "nutritionist_dietitian"}
 REFERRAL_STATES = {"sent", "accepted", "arrived", "in_care", "completed", "redirected"}
 DEPARTMENTS = {"Records", "OPD", "Consulting Room", "Laboratory", "Pharmacy", "RCH", "Theatre", "Finance"}
@@ -245,6 +245,9 @@ def overview(user: User = Depends(care_user), db: Session = Depends(get_db)):
     facility = facility_for(user)
     episodes = db.scalars(select(CareEpisode).where(CareEpisode.facility == facility).order_by(CareEpisode.created_at.desc()).limit(200)).all()
     referrals = db.scalars(select(NetworkReferral).where(or_(NetworkReferral.source_facility == facility, NetworkReferral.destination_facility == facility)).order_by(NetworkReferral.created_at.desc()).limit(100)).all()
+    role_department = {"opd_nurse":"OPD", "laboratory_officer":"Laboratory", "pharmacist":"Pharmacy"}.get(user.role)
+    if role_department: episodes = [row for row in episodes if row.assigned_department == role_department]
+    if user.role == "records_officer": episodes = [row for row in episodes if row.created_by == user.username]
     queues = {}
     for row in episodes:
         if row.status not in {"completed", "cancelled"}:
@@ -285,7 +288,7 @@ def list_facilities(user: User = Depends(care_user), db: Session = Depends(get_d
 
 
 @router.post("/episodes", status_code=201)
-def register_episode(payload: dict, user: User = Depends(care_allow("administrator", "clinician", "nutritionist_dietitian", "field_officer")), db: Session = Depends(get_db)):
+def register_episode(payload: dict, user: User = Depends(care_allow("administrator", "records_officer")), db: Session = Depends(get_db)):
     facility = facility_for(user)
     patient_code = clean(payload.get("patient_code"), 64).upper()
     if not patient_code:
@@ -313,13 +316,16 @@ def register_episode(payload: dict, user: User = Depends(care_allow("administrat
 def list_episodes(department: str | None = None, status: str | None = None, user: User = Depends(care_user), db: Session = Depends(get_db)):
     require_care_role(user); facility = facility_for(user)
     stmt = select(CareEpisode).where(CareEpisode.facility == facility).order_by(CareEpisode.created_at.desc()).limit(300)
+    role_department = {"opd_nurse":"OPD", "laboratory_officer":"Laboratory", "pharmacist":"Pharmacy"}.get(user.role)
+    if role_department: stmt = stmt.where(CareEpisode.assigned_department == role_department)
+    if user.role == "records_officer": stmt = stmt.where(CareEpisode.created_by == user.username)
     if department: stmt = stmt.where(CareEpisode.assigned_department == department)
     if status: stmt = stmt.where(CareEpisode.status == status)
     return [episode_json(row) for row in db.scalars(stmt).all()]
 
 
 @router.post("/episodes/{episode_id}/triage", status_code=201)
-def add_triage(episode_id: str, payload: dict, user: User = Depends(care_allow("administrator", "clinician", "field_officer")), db: Session = Depends(get_db)):
+def add_triage(episode_id: str, payload: dict, user: User = Depends(care_allow("administrator", "opd_nurse")), db: Session = Depends(get_db)):
     episode = require_local_episode(db, episode_id, user)
     vitals = {key: payload.get(key) for key in ("temperature_c", "pulse", "respiratory_rate", "oxygen_saturation", "systolic", "diastolic", "weight_kg", "height_cm")}
     if not any(value is not None and value != "" for value in vitals.values()):
@@ -346,7 +352,7 @@ def add_consultation(episode_id: str, payload: dict, user: User = Depends(care_a
 
 
 @router.post("/episodes/{episode_id}/laboratory", status_code=201)
-def add_lab_result(episode_id: str, payload: dict, user: User = Depends(care_allow("administrator", "clinician", "field_officer")), db: Session = Depends(get_db)):
+def add_lab_result(episode_id: str, payload: dict, user: User = Depends(care_allow("administrator", "laboratory_officer")), db: Session = Depends(get_db)):
     episode = require_local_episode(db, episode_id, user)
     test_name, result = clean(payload.get("test_name"), 100), clean(payload.get("result"), 120)
     if not test_name or not result: raise HTTPException(422, "Test name and result are required")
@@ -369,14 +375,14 @@ def prescribe(episode_id: str, payload: dict, user: User = Depends(care_allow("a
 
 
 @router.get("/medications")
-def list_medications(user: User = Depends(care_user), db: Session = Depends(get_db)):
-    require_care_role(user); facility = facility_for(user)
+def list_medications(user: User = Depends(care_allow("administrator", "pharmacist")), db: Session = Depends(get_db)):
+    facility = facility_for(user)
     rows = db.scalars(select(MedicationOrder).where(MedicationOrder.facility == facility).order_by(MedicationOrder.created_at.desc()).limit(200)).all()
     return [{"order_id": row.order_id, "episode_id": row.episode_id, "patient_code": row.patient_code, "medicine": row.medicine, "instructions": row.instructions, "status": row.status, "prescribed_by": row.prescribed_by} for row in rows]
 
 
 @router.patch("/medications/{order_id}/dispense")
-def dispense(order_id: str, user: User = Depends(care_allow("administrator", "clinician", "field_officer")), db: Session = Depends(get_db)):
+def dispense(order_id: str, user: User = Depends(care_allow("administrator", "pharmacist")), db: Session = Depends(get_db)):
     row = db.scalar(select(MedicationOrder).where(MedicationOrder.order_id == order_id))
     if not row: raise HTTPException(404, "Medication order not found")
     if user.role != "administrator" and row.facility.casefold() != facility_for(user).casefold(): raise HTTPException(403, "This order belongs to another facility")
