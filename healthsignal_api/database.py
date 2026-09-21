@@ -251,6 +251,73 @@ class MedicationOrder(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     dispensed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
+class WardAdmission(Base):
+    __tablename__ = "ward_admissions"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    admission_id: Mapped[str] = mapped_column(String(36), unique=True, index=True)
+    episode_id: Mapped[str] = mapped_column(String(36), index=True)
+    patient_code: Mapped[str] = mapped_column(String(64), index=True)
+    facility: Mapped[str] = mapped_column(String(160), index=True)
+    ward: Mapped[str] = mapped_column(String(80), index=True)
+    bed_number: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    admission_reason: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(30), default="admitted", index=True)
+    admitted_by: Mapped[str] = mapped_column(String(80))
+    discharge_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    admitted_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    discharged_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+class AncVisit(Base):
+    __tablename__ = "anc_visits"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    anc_id: Mapped[str] = mapped_column(String(36), unique=True, index=True)
+    episode_id: Mapped[str] = mapped_column(String(36), index=True)
+    patient_code: Mapped[str] = mapped_column(String(64), index=True)
+    facility: Mapped[str] = mapped_column(String(160), index=True)
+    gestational_age_weeks: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    gravida: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    parity: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    systolic: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    diastolic: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    haemoglobin_g_dl: Mapped[float | None] = mapped_column(Float, nullable=True)
+    fetal_heart_rate: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    danger_signs: Mapped[str] = mapped_column(Text, default="")
+    plan: Mapped[str] = mapped_column(Text)
+    next_visit_date: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    recorded_by: Mapped[str] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+class InventoryItem(Base):
+    __tablename__ = "inventory_items"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    item_id: Mapped[str] = mapped_column(String(36), unique=True, index=True)
+    facility: Mapped[str] = mapped_column(String(160), index=True)
+    item_name: Mapped[str] = mapped_column(String(160), index=True)
+    category: Mapped[str] = mapped_column(String(80), index=True)
+    quantity: Mapped[int] = mapped_column(Integer, default=0)
+    reorder_level: Mapped[int] = mapped_column(Integer, default=0)
+    unit: Mapped[str] = mapped_column(String(40), default="unit")
+    batch_number: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    expiry_date: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    updated_by: Mapped[str] = mapped_column(String(80))
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+class RevenueTransaction(Base):
+    __tablename__ = "revenue_transactions"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    transaction_id: Mapped[str] = mapped_column(String(36), unique=True, index=True)
+    receipt_number: Mapped[str] = mapped_column(String(40), unique=True, index=True)
+    episode_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    patient_code: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    facility: Mapped[str] = mapped_column(String(160), index=True)
+    service: Mapped[str] = mapped_column(String(160), index=True)
+    amount: Mapped[float] = mapped_column(Float)
+    payment_method: Mapped[str] = mapped_column(String(40))
+    status: Mapped[str] = mapped_column(String(30), default="paid", index=True)
+    collected_by: Mapped[str] = mapped_column(String(80))
+    notes: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
 class NetworkReferral(Base):
     __tablename__ = "network_referrals"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

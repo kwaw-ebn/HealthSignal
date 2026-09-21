@@ -52,6 +52,11 @@
         <button class="care-tab" data-care-panel="careConsultation">Consultation</button>
         <button class="care-tab" data-care-panel="careLaboratory">Laboratory</button>
         <button class="care-tab" data-care-panel="carePharmacy">Pharmacy</button>
+        <button class="care-tab" data-care-panel="careWards">Wards</button>
+        <button class="care-tab" data-care-panel="careAnc">ANC</button>
+        <button class="care-tab" data-care-panel="careStores">Stores</button>
+        <button class="care-tab" data-care-panel="careRevenue">Revenue</button>
+        <button class="care-tab" data-care-panel="careAccounts">Accounts</button>
         <button class="care-tab" data-care-panel="careReferral">Referral network</button>
       </div>
       <div id="careOverview" class="care-panel active">
@@ -72,6 +77,22 @@
       </div>
       <div id="carePharmacy" class="care-panel">
         <div class="care-grid"><form id="medicationForm" class="card"><span class="department-tag">Prescription</span><label>Care episode<select id="medEpisode" required></select></label><label>Medicine<input id="medicineName" required></label><label>Dose and instructions<textarea id="medicineInstructions" required></textarea></label><button class="primary" type="submit">Send prescription</button></form><div id="pharmacyQueueCard" class="card"><span class="department-tag">Pharmacy</span><h3>Dispensing queue</h3><div id="medicationQueue" class="compact-list"></div></div></div>
+      </div>
+      <div id="careWards" class="care-panel">
+        <div id="wardOccupancy" class="ward-grid"></div>
+        <div class="care-grid"><form id="wardAdmissionForm" class="card"><span class="department-tag">Inpatient admission</span><h3>Assign patient to ward</h3><label>Care episode<select id="wardEpisode" required></select></label><div class="grid two"><label>Ward<select id="wardSelect"><option>Female Ward</option><option>Male Ward</option><option>Children's Ward</option><option>Emergency</option><option>Maternity Ward</option><option>Male Surgical Ward</option><option>Female Surgical Ward</option><option>Theatre</option><option>ICU</option><option>NICU</option></select></label><label>Bed number<input id="wardBed" placeholder="Optional"></label></div><label>Admission reason<textarea id="wardReason" required></textarea></label><button class="primary" type="submit">Admit patient</button></form><div class="card"><span class="department-tag">Ward census</span><h3>Active admissions</h3><div id="wardAdmissions" class="compact-list"></div></div></div>
+      </div>
+      <div id="careAnc" class="care-panel">
+        <div class="care-grid"><form id="ancForm" class="card"><span class="department-tag">Antenatal care</span><h3>Record ANC visit</h3><label>Care episode<select id="ancEpisode" required></select></label><div class="grid two"><label>Gestational age (weeks)<input id="ancGestation" type="number" min="0" max="45"></label><label>Gravida<input id="ancGravida" type="number" min="0"></label><label>Parity<input id="ancParity" type="number" min="0"></label><label>Blood pressure<input id="ancBp" placeholder="e.g. 120/80"></label><label>Haemoglobin g/dL<input id="ancHb" type="number" step=".1"></label><label>Fetal heart rate /min<input id="ancFhr" type="number"></label></div><label>Danger signs or concerns<textarea id="ancDangerSigns"></textarea></label><label>Care plan<textarea id="ancPlan" required></textarea></label><label>Next visit<input id="ancNextVisit" type="date"></label><button class="primary" type="submit">Save ANC visit</button></form><div class="card"><span class="department-tag">ANC history</span><h3>Recent ANC visits</h3><div id="ancVisits" class="compact-list"></div></div></div>
+      </div>
+      <div id="careStores" class="care-panel">
+        <div class="care-grid"><form id="inventoryForm" class="card"><span class="department-tag">Stores</span><h3>Add or update inventory</h3><div class="grid two"><label>Item name<input id="inventoryName" required></label><label>Category<input id="inventoryCategory" required></label><label>Quantity<input id="inventoryQuantity" type="number" min="0" required></label><label>Reorder level<input id="inventoryReorder" type="number" min="0" required></label><label>Unit<input id="inventoryUnit" placeholder="boxes, bottles, units" required></label><label>Batch number<input id="inventoryBatch"></label><label>Expiry date<input id="inventoryExpiry" type="date"></label></div><button class="primary" type="submit">Save inventory item</button></form><div class="card"><span class="department-tag">Stock position</span><h3>Facility inventory</h3><div id="inventoryList" class="compact-list"></div></div></div>
+      </div>
+      <div id="careRevenue" class="care-panel">
+        <div class="care-grid"><form id="revenueForm" class="card"><span class="department-tag">Revenue collection</span><h3>Record payment</h3><label>Care episode (optional)<select id="revenueEpisode"></select></label><label>Patient ID<input id="revenuePatientCode" placeholder="Required when no episode is selected"></label><div class="grid two"><label>Service<input id="revenueService" required></label><label>Amount (GHS)<input id="revenueAmount" type="number" step=".01" min="0" required></label><label>Payment method<select id="revenueMethod"><option>Cash</option><option>Mobile Money</option><option>Card</option><option>Bank</option><option>Insurance</option></select></label><label>Notes<input id="revenueNotes"></label></div><button class="primary" type="submit">Issue receipt</button><div id="revenueReceipt"></div></form><div class="card"><span class="department-tag">Daily transactions</span><h3>Revenue register</h3><div id="revenueTransactions" class="compact-list"></div></div></div>
+      </div>
+      <div id="careAccounts" class="care-panel">
+        <div class="metrics"><div class="metric"><span>Recorded transactions</span><b id="accountTransactionCount">0</b></div><div class="metric"><span>Total revenue</span><b id="accountRevenueTotal">GHS 0.00</b></div><div class="metric"><span>Reconciliation status</span><b>Open</b></div></div><div class="card"><span class="department-tag">Accounts</span><h3>Revenue by payment method</h3><div id="accountPaymentBreakdown" class="department-grid"></div></div>
       </div>
       <div id="careReferral" class="care-panel">
         <div class="privacy-banner"><b>Controlled continuity of care</b><span>A patient ID alone cannot open another facility's record. The receiving team also needs the time limited referral code, an authorized account and a documented access reason.</span></div>
@@ -117,5 +138,5 @@
     <section id="about" class="view"><div class="card prose"><div class="about-company"><img src="/static/ek-synergy.jpeg" alt="EK Synergy Ltd — Driving Innovation Forward"><div><span class="eyebrow">AN EK SYNERGY LTD INNOVATION</span><h2>Public health intelligence designed for field realities</h2><p class="company-motto">Driving Innovation Forward</p></div></div><p>HealthSignal is a Ghana focused screening and surveillance platform created by Ebenezer Kwaw. It combines structured field capture, transparent decision support and aggregate public health signals.</p><div class="notice"><b>Clinical safety notice</b><p>This development version supports screening and surveillance. It does not diagnose disease or replace clinical judgement, diagnostic testing or approved Ghana Health Service protocols.</p></div></div></section>
   </main>
   <div id="reviewModal" class="review-modal hidden" role="dialog" aria-modal="true" aria-labelledby="reviewModalTitle"><div class="review-dialog"><button id="closeReview" class="modal-close" type="button" aria-label="Close">×</button><div id="reviewDetail"></div></div></div>
-  <div id="toast" role="status"></div><script src="/static/app.js?v=20260914-11"></script>
+  <div id="toast" role="status"></div><script src="/static/app.js?v=20260921-1"></script>
 </body></html>

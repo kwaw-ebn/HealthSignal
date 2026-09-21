@@ -18,6 +18,10 @@ from .database import (
     LaboratoryTest,
     LocationAccessGrant,
     MedicationOrder,
+    WardAdmission,
+    AncVisit,
+    InventoryItem,
+    RevenueTransaction,
     NetworkReferral,
     NetworkReferralEvent,
     ReferralAccessGrant,
@@ -28,10 +32,11 @@ from .database import (
 
 router = APIRouter(prefix="/api/v1/care-network", tags=["Care Network"])
 
-CARE_ROLES = {"administrator", "clinician", "nutritionist_dietitian", "opd_nurse", "records_officer", "laboratory_officer", "pharmacist"}
+CARE_ROLES = {"administrator", "clinician", "nutritionist_dietitian", "opd_nurse", "records_officer", "laboratory_officer", "pharmacist", "ward_nurse", "midwife", "theatre_staff", "stores_officer", "revenue_officer", "accountant"}
 CLINICAL_ROLES = {"administrator", "clinician", "nutritionist_dietitian"}
 REFERRAL_STATES = {"sent", "accepted", "arrived", "in_care", "completed", "redirected"}
-DEPARTMENTS = {"Records", "OPD", "Consulting Room", "Laboratory", "Pharmacy", "RCH", "Theatre", "Finance"}
+WARDS = {"Female Ward", "Male Ward", "Children's Ward", "Emergency", "Maternity Ward", "Male Surgical Ward", "Female Surgical Ward", "Theatre", "ICU", "NICU"}
+DEPARTMENTS = {"Records", "OPD", "Consulting Room", "Laboratory", "Pharmacy", "RCH", "ANC", "Stores", "Revenue", "Accounts", "Finance"} | WARDS
 SHAREABLE_SCOPES = {"demographics", "care_summary", "allergies", "vitals", "laboratory", "medications"}
 REFERRAL_ACCESS_ROLES = {"administrator", "clinician", "nutritionist_dietitian"}
 
@@ -392,6 +397,87 @@ def dispense(order_id: str, user: User = Depends(care_allow("administrator", "ph
     db.add(CareEvent(event_id=str(uuid.uuid4()), episode_id=row.episode_id, patient_code=row.patient_code, facility=row.facility, department="Pharmacy", event_type="medication_dispensed", summary=row.medicine, clinical_data_json="{}", created_by=user.username))
     audit(db, user, "medication_dispensed", "medication_order", order_id, row.medicine); db.commit()
     return {"order_id": order_id, "status": row.status}
+
+
+@router.get("/wards")
+def list_wards(user: User = Depends(care_allow("administrator", "clinician", "ward_nurse", "midwife", "theatre_staff")), db: Session = Depends(get_db)):
+    facility=facility_for(user)
+    rows=db.scalars(select(WardAdmission).where(WardAdmission.facility==facility,WardAdmission.status=="admitted").order_by(WardAdmission.admitted_at.desc())).all()
+    return {"wards":[{"ward":ward,"occupied":sum(1 for row in rows if row.ward==ward)} for ward in sorted(WARDS)],"admissions":[{"admission_id":r.admission_id,"episode_id":r.episode_id,"patient_code":r.patient_code,"ward":r.ward,"bed_number":r.bed_number,"reason":r.admission_reason,"status":r.status,"admitted_at":r.admitted_at.isoformat()} for r in rows]}
+
+
+@router.post("/wards/admissions",status_code=201)
+def admit_patient(payload:dict,user:User=Depends(care_allow("administrator","clinician","ward_nurse","midwife","theatre_staff")),db:Session=Depends(get_db)):
+    episode=require_local_episode(db,clean(payload.get("episode_id"),36),user); ward=clean(payload.get("ward"),80); reason=clean(payload.get("admission_reason"))
+    if ward not in WARDS or len(reason)<3: raise HTTPException(422,"Select a valid ward and record the admission reason")
+    active=db.scalar(select(WardAdmission).where(WardAdmission.episode_id==episode.episode_id,WardAdmission.status=="admitted"))
+    if active: raise HTTPException(409,"This care episode already has an active ward admission")
+    row=WardAdmission(admission_id=str(uuid.uuid4()),episode_id=episode.episode_id,patient_code=episode.patient_code,facility=episode.facility,ward=ward,bed_number=clean(payload.get("bed_number"),30) or None,admission_reason=reason,admitted_by=user.username)
+    db.add(row);episode.status="admitted";episode.assigned_department=ward;episode.updated_at=datetime.utcnow()
+    db.add(CareEvent(event_id=str(uuid.uuid4()),episode_id=episode.episode_id,patient_code=episode.patient_code,facility=episode.facility,department=ward,event_type="ward_admission",summary=reason,clinical_data_json=json.dumps({"bed_number":row.bed_number}),created_by=user.username));audit(db,user,"ward_admission_created","ward_admission",row.admission_id,ward);db.commit()
+    return {"admission_id":row.admission_id,"patient_code":row.patient_code,"ward":ward,"status":row.status}
+
+
+@router.patch("/wards/admissions/{admission_id}/discharge")
+def discharge_patient(admission_id:str,payload:dict,user:User=Depends(care_allow("administrator","clinician","ward_nurse","midwife")),db:Session=Depends(get_db)):
+    row=db.scalar(select(WardAdmission).where(WardAdmission.admission_id==admission_id));summary=clean(payload.get("discharge_summary"))
+    if not row: raise HTTPException(404,"Ward admission not found")
+    if user.role!="administrator" and row.facility.casefold()!=facility_for(user).casefold(): raise HTTPException(403,"This admission belongs to another facility")
+    if len(summary)<5: raise HTTPException(422,"Record a discharge or transfer summary")
+    row.status="discharged";row.discharge_summary=summary;row.discharged_at=datetime.utcnow();episode=db.scalar(select(CareEpisode).where(CareEpisode.episode_id==row.episode_id))
+    if episode: episode.status="completed";episode.assigned_department="Completed";episode.updated_at=datetime.utcnow()
+    audit(db,user,"ward_discharge_recorded","ward_admission",admission_id,row.ward);db.commit();return {"admission_id":admission_id,"status":"discharged"}
+
+
+@router.get("/anc")
+def list_anc(user:User=Depends(care_allow("administrator","clinician","midwife","nutritionist_dietitian")),db:Session=Depends(get_db)):
+    facility=facility_for(user);rows=db.scalars(select(AncVisit).where(AncVisit.facility==facility).order_by(AncVisit.created_at.desc()).limit(100)).all()
+    return [{"anc_id":r.anc_id,"patient_code":r.patient_code,"gestational_age_weeks":r.gestational_age_weeks,"blood_pressure":f"{r.systolic}/{r.diastolic}" if r.systolic and r.diastolic else None,"haemoglobin_g_dl":r.haemoglobin_g_dl,"next_visit_date":r.next_visit_date,"created_at":r.created_at.isoformat()} for r in rows]
+
+
+@router.post("/anc",status_code=201)
+def record_anc(payload:dict,user:User=Depends(care_allow("administrator","clinician","midwife","nutritionist_dietitian")),db:Session=Depends(get_db)):
+    episode=require_local_episode(db,clean(payload.get("episode_id"),36),user);plan=clean(payload.get("plan"))
+    if len(plan)<3: raise HTTPException(422,"Record the ANC assessment plan")
+    row=AncVisit(anc_id=str(uuid.uuid4()),episode_id=episode.episode_id,patient_code=episode.patient_code,facility=episode.facility,gestational_age_weeks=payload.get("gestational_age_weeks"),gravida=payload.get("gravida"),parity=payload.get("parity"),systolic=payload.get("systolic"),diastolic=payload.get("diastolic"),haemoglobin_g_dl=payload.get("haemoglobin_g_dl"),fetal_heart_rate=payload.get("fetal_heart_rate"),danger_signs=clean(payload.get("danger_signs")),plan=plan,next_visit_date=clean(payload.get("next_visit_date"),10) or None,recorded_by=user.username)
+    db.add(row);episode.assigned_department="ANC";episode.status="in_care";episode.updated_at=datetime.utcnow();audit(db,user,"anc_visit_recorded","anc_visit",row.anc_id);db.commit();return {"anc_id":row.anc_id,"patient_code":row.patient_code,"status":"recorded"}
+
+
+@router.get("/stores")
+def list_inventory(user:User=Depends(care_allow("administrator","stores_officer","pharmacist","accountant")),db:Session=Depends(get_db)):
+    rows=db.scalars(select(InventoryItem).where(InventoryItem.facility==facility_for(user)).order_by(InventoryItem.item_name)).all()
+    return [{"item_id":r.item_id,"item_name":r.item_name,"category":r.category,"quantity":r.quantity,"reorder_level":r.reorder_level,"unit":r.unit,"batch_number":r.batch_number,"expiry_date":r.expiry_date,"low_stock":r.quantity<=r.reorder_level} for r in rows]
+
+
+@router.post("/stores",status_code=201)
+def save_inventory(payload:dict,user:User=Depends(care_allow("administrator","stores_officer")),db:Session=Depends(get_db)):
+    name=clean(payload.get("item_name"),160);category=clean(payload.get("category"),80);quantity=payload.get("quantity");reorder=payload.get("reorder_level",0)
+    if not name or not category or not isinstance(quantity,int) or quantity<0 or not isinstance(reorder,int) or reorder<0: raise HTTPException(422,"Enter a valid item, category, quantity and reorder level")
+    row=InventoryItem(item_id=str(uuid.uuid4()),facility=facility_for(user),item_name=name,category=category,quantity=quantity,reorder_level=reorder,unit=clean(payload.get("unit"),40) or "unit",batch_number=clean(payload.get("batch_number"),80) or None,expiry_date=clean(payload.get("expiry_date"),10) or None,updated_by=user.username)
+    db.add(row);audit(db,user,"inventory_item_created","inventory_item",row.item_id,name);db.commit();return {"item_id":row.item_id,"status":"saved"}
+
+
+@router.get("/finance/transactions")
+def list_revenue(user:User=Depends(care_allow("administrator","revenue_officer","accountant")),db:Session=Depends(get_db)):
+    rows=db.scalars(select(RevenueTransaction).where(RevenueTransaction.facility==facility_for(user)).order_by(RevenueTransaction.created_at.desc()).limit(300)).all()
+    return [{"transaction_id":r.transaction_id,"receipt_number":r.receipt_number,"patient_code":r.patient_code,"service":r.service,"amount":r.amount,"payment_method":r.payment_method,"status":r.status,"collected_by":r.collected_by,"created_at":r.created_at.isoformat()} for r in rows]
+
+
+@router.post("/finance/transactions",status_code=201)
+def collect_revenue(payload:dict,user:User=Depends(care_allow("administrator","revenue_officer")),db:Session=Depends(get_db)):
+    service=clean(payload.get("service"),160);method=clean(payload.get("payment_method"),40)
+    try: amount=float(payload.get("amount"))
+    except (TypeError,ValueError): raise HTTPException(422,"Enter a valid amount")
+    if not service or amount<=0 or method not in {"Cash","Mobile Money","Card","Bank","Insurance","Other"}: raise HTTPException(422,"Enter a valid service, positive amount and payment method")
+    receipt="HSR-"+datetime.utcnow().strftime("%Y%m%d")+"-"+secrets.token_hex(3).upper();row=RevenueTransaction(transaction_id=str(uuid.uuid4()),receipt_number=receipt,episode_id=clean(payload.get("episode_id"),36) or None,patient_code=clean(payload.get("patient_code"),64).upper() or None,facility=facility_for(user),service=service,amount=amount,payment_method=method,collected_by=user.username,notes=clean(payload.get("notes")))
+    db.add(row);audit(db,user,"revenue_collected","revenue_transaction",row.transaction_id,f"{receipt}; amount={amount:.2f}");db.commit();return {"transaction_id":row.transaction_id,"receipt_number":receipt,"status":"paid","amount":amount}
+
+
+@router.get("/finance/summary")
+def finance_summary(user:User=Depends(care_allow("administrator","accountant")),db:Session=Depends(get_db)):
+    rows=db.scalars(select(RevenueTransaction).where(RevenueTransaction.facility==facility_for(user),RevenueTransaction.status=="paid")).all();by_method={}
+    for r in rows: by_method[r.payment_method]=round(by_method.get(r.payment_method,0)+r.amount,2)
+    return {"transaction_count":len(rows),"total_revenue":round(sum(r.amount for r in rows),2),"by_payment_method":[{"method":k,"amount":v} for k,v in sorted(by_method.items())]}
 
 
 @router.post("/referrals", status_code=201)
