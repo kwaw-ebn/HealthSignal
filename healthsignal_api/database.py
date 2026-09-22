@@ -318,6 +318,25 @@ class RevenueTransaction(Base):
     notes: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
+class ServiceCharge(Base):
+    __tablename__ = "service_charges"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    charge_id: Mapped[str] = mapped_column(String(36), unique=True, index=True)
+    episode_id: Mapped[str] = mapped_column(String(36), index=True)
+    patient_code: Mapped[str] = mapped_column(String(64), index=True)
+    facility: Mapped[str] = mapped_column(String(160), index=True)
+    service_area: Mapped[str] = mapped_column(String(80), index=True)
+    description: Mapped[str] = mapped_column(String(200))
+    amount: Mapped[float] = mapped_column(Float, default=0)
+    payer: Mapped[str] = mapped_column(String(20), default="patient", index=True)
+    insurance_covered: Mapped[bool] = mapped_column(Boolean, default=False)
+    status: Mapped[str] = mapped_column(String(30), default="patient_due", index=True)
+    source_type: Mapped[str] = mapped_column(String(60), default="manual")
+    source_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    created_by: Mapped[str] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    settled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
 class InsuranceClaim(Base):
     __tablename__ = "insurance_claims"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

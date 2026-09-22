@@ -1,6 +1,7 @@
 import os
 import secrets
 import tempfile
+from datetime import datetime
 
 db_file=tempfile.NamedTemporaryFile(suffix=".db",delete=False)
 db_file.close()
@@ -232,3 +233,29 @@ def test_insurance_claim_is_created_from_records_and_collects_services_for_xml()
         exported=client.get(f"/api/v1/care-network/insurance/claims/{claim['claim_id']}/xml",headers=insurance)
         assert exported.status_code==200 and exported.headers["content-type"].startswith("application/xml")
         assert b"NHIA-standardized-eclaims" in exported.content and b"NHIS-TEST-001" in exported.content
+
+def test_admission_service_billing_insurance_routing_and_clearance_reports():
+    with TestClient(app) as client:
+        admin=admin_headers(client)
+        client.put("/api/v1/care-network/security/config",headers=admin,json={"facility":"HealthSignal Demonstration Hospital","latitude":5.6037,"longitude":-0.1870,"allowed_radius_m":250,"geofence_enabled":False})
+        episode=client.post("/api/v1/care-network/episodes",headers=admin,json={"age":45,"sex":"Male","community":"Nsaba","chief_complaint":"Admission test","insurance_number":"NHIS-BILL-1","ccc_number":"CCC-BILL-1","surname":"Test","attendance_type":"OPD"}).json()
+        episode_id=episode["episode_id"]
+        admitted=client.post(f"/api/v1/care-network/episodes/{episode_id}/consultation",headers=admin,json={"assessment":"Requires inpatient observation","plan":"Admit and monitor","disposition":"Admit","ward":"Male Ward","charge_amount":50,"insurance_covered":True})
+        assert admitted.status_code==201 and admitted.json()["next_department"]=="Admit"
+        assert client.post(f"/api/v1/care-network/episodes/{episode_id}/laboratory",headers=admin,json={"test_name":"Full blood count","result":"Reviewed","charge_amount":25,"insurance_covered":False}).status_code==201
+        assert client.post(f"/api/v1/care-network/episodes/{episode_id}/medications",headers=admin,json={"medicine":"Test medicine","instructions":"Ward treatment","charge_amount":15,"insurance_covered":True}).status_code==201
+        bill=client.get(f"/api/v1/care-network/billing/episodes/{episode_id}",headers=admin).json()
+        assert bill["visit_type"]=="Inpatient" and bill["insurance_total"]==65 and bill["patient_balance"]==25
+        claim=next(x for x in client.get("/api/v1/care-network/insurance/claims",headers=admin).json() if x["episode_id"]==episode_id)
+        assert client.patch(f"/api/v1/care-network/insurance/claims/{claim['claim_id']}",headers=admin,json={"physician_name_id":"DR-1","service_outcome":"Discharged","specialty":"MEDI","principal_gdrg":"TEST"}).status_code==200
+        assert client.get(f"/api/v1/care-network/insurance/claims/{claim['claim_id']}",headers=admin).json()["attendance_type"]=="Inpatient"
+        assert client.post(f"/api/v1/care-network/insurance/claims/{claim['claim_id']}/validate",headers=admin).status_code==200
+        assert client.get(f"/api/v1/care-network/insurance/claims/{claim['claim_id']}/xml",headers=admin).status_code==200
+        paid=client.post(f"/api/v1/care-network/billing/episodes/{episode_id}/pay",headers=admin,json={"payment_method":"Mobile Money"})
+        assert paid.status_code==200 and paid.json()["amount"]==25
+        cleared=client.post(f"/api/v1/care-network/billing/episodes/{episode_id}/clear",headers=admin)
+        assert cleared.status_code==200 and cleared.json()["status"]=="completed"
+        month=datetime.utcnow().strftime("%Y-%m")
+        assert client.get(f"/api/v1/care-network/reports/monthly?month={month}",headers=admin).status_code==200
+        assert client.get(f"/api/v1/care-network/reports/financial?month={month}",headers=admin).json()["billed"]>=90
+        assert client.get(f"/api/v1/care-network/reports/system-usage?month={month}",headers=admin).status_code==200
