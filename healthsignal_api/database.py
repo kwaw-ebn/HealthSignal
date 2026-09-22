@@ -318,6 +318,36 @@ class RevenueTransaction(Base):
     notes: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
+class InsuranceClaim(Base):
+    __tablename__ = "insurance_claims"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    claim_id: Mapped[str] = mapped_column(String(36), unique=True, index=True)
+    episode_id: Mapped[str] = mapped_column(String(36), unique=True, index=True)
+    patient_code: Mapped[str] = mapped_column(String(64), index=True)
+    facility: Mapped[str] = mapped_column(String(160), index=True)
+    member_number: Mapped[str] = mapped_column(String(80), index=True)
+    ccc_number: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    surname: Mapped[str] = mapped_column(String(120), default="")
+    other_names: Mapped[str] = mapped_column(String(180), default="")
+    gender: Mapped[str] = mapped_column(String(20), default="Not recorded")
+    date_of_birth: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    folder_number: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    attendance_type: Mapped[str] = mapped_column(String(40), default="Emergency/Acute Episode")
+    specialty: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    service_outcome: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    referring_facility: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    referral_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    physician_name_id: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    pre_authorization_codes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    principal_gdrg: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    manual_entries_json: Mapped[str] = mapped_column(Text, default="[]")
+    status: Mapped[str] = mapped_column(String(30), default="draft", index=True)
+    validation_json: Mapped[str] = mapped_column(Text, default="[]")
+    created_by: Mapped[str] = mapped_column(String(80))
+    reviewed_by: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
 class NetworkReferral(Base):
     __tablename__ = "network_referrals"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

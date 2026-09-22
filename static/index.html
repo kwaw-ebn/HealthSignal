@@ -4,7 +4,7 @@
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#075968"><title>HealthSignal | Public Health Decision Support</title>
   <link rel="manifest" href="/static/manifest.json">
-  <link rel="stylesheet" href="/static/styles.css?v=20260913-7">
+  <link rel="stylesheet" href="/static/styles.css?v=20260922-1">
   <link rel="stylesheet" href="/static/auth.css?v=20260913-7">
   <link rel="stylesheet" href="/static/surveillance.css?v=20260913-4">
   <link rel="stylesheet" href="/static/reviews.css?v=20260913-5">
@@ -57,6 +57,7 @@
         <button class="care-tab" data-care-panel="careStores">Stores</button>
         <button class="care-tab" data-care-panel="careRevenue">Revenue</button>
         <button class="care-tab" data-care-panel="careAccounts">Accounts</button>
+        <button class="care-tab" data-care-panel="careInsurance">Insurance claims</button>
         <button class="care-tab" data-care-panel="careReferral">Referral network</button>
       </div>
       <div id="careOverview" class="care-panel active">
@@ -93,6 +94,11 @@
       </div>
       <div id="careAccounts" class="care-panel">
         <div class="metrics"><div class="metric"><span>Recorded transactions</span><b id="accountTransactionCount">0</b></div><div class="metric"><span>Total revenue</span><b id="accountRevenueTotal">GHS 0.00</b></div><div class="metric"><span>Reconciliation status</span><b>Open</b></div></div><div class="card"><span class="department-tag">Accounts</span><h3>Revenue by payment method</h3><div id="accountPaymentBreakdown" class="department-grid"></div></div>
+      </div>
+      <div id="careInsurance" class="care-panel">
+        <div class="insurance-notice"><b>NHIS CLAIM-it integration workspace</b><span>Clinical services populate the claim draft automatically. XML export is an MVP connector and must be validated against the current NHIA schema before live submission.</span></div>
+        <div class="care-grid insurance-layout"><div class="card"><div class="section-title"><div><span class="department-tag">Claims queue</span><h3>Insurance claims</h3></div><button id="refreshInsurance" class="secondary" type="button">Refresh</button></div><div id="insuranceClaimList" class="claim-list"></div></div>
+        <form id="insuranceClaimForm" class="card hidden"><span class="department-tag">Claim review</span><h3 id="insuranceClaimTitle">Claim details</h3><input id="insuranceClaimId" type="hidden"><div class="grid two"><label>Member No / HIN<input id="claimMemberNumber" required></label><label>CCC No.<input id="claimCccNumber" required></label><label>Surname<input id="claimSurname" required></label><label>Other names<input id="claimOtherNames"></label><label>Gender<select id="claimGender"><option>Female</option><option>Male</option><option>Other</option><option>Not recorded</option></select></label><label>Date of birth<input id="claimDob" type="date"></label><label>Folder number<input id="claimFolder"></label><label>Attendance type<select id="claimAttendance"><option>Emergency/Acute Episode</option><option>Chronic Follow-up</option><option>Ante-natal</option><option>Post-natal</option></select></label><label>Service outcome<select id="claimOutcome"><option value="">Select outcome</option><option>Discharged</option><option>Transferred Out</option><option>Died</option><option>Absconded</option></select></label><label>Specialty<select id="claimSpecialty"><option value="">Select specialty</option><option>MEDI</option><option>NSUR</option><option>OBGY</option><option>PAED</option><option>OPDC</option><option>PSUR</option><option>ORTH</option><option>DENT</option><option>OPHT</option><option>ENTH</option></select></label><label>Physician name / ID<input id="claimPhysician" required></label><label>Pre-authorization codes<input id="claimPreauth"></label><label>Principal GDRG<input id="claimGdrg"></label><label>Referring facility<input id="claimReferringFacility"></label><label>Referral code / CCC<input id="claimReferralCode"></label></div><h3>Automatically collected service entries</h3><div id="claimAutoEntries" class="claim-sections"></div><h3>Add claim entry</h3><div class="grid two"><label>Entry type<select id="claimEntryType"><option value="diagnosis">Diagnosis</option><option value="procedure">Procedure</option><option value="investigation">Investigation</option><option value="medicine">Medicine</option></select></label><label>Code<input id="claimEntryCode"></label><label>Description<input id="claimEntryDescription"></label><label>Quantity<input id="claimEntryQuantity" type="number" min="1"></label><label>Unit cost (GHS)<input id="claimEntryCost" type="number" min="0" step=".01"></label></div><button id="addClaimEntry" class="secondary" type="button">Add entry</button><div id="claimManualEntries" class="compact-list"></div><div class="claim-actions"><button class="primary" type="submit">Save claim draft</button><button id="validateClaim" class="secondary" type="button">Validate claim</button><button id="exportClaimXml" class="secondary" type="button">Export XML</button></div><div id="claimValidation"></div></form></div>
       </div>
       <div id="careReferral" class="care-panel">
         <div class="privacy-banner"><b>Controlled continuity of care</b><span>A patient ID alone cannot open another facility's record. The receiving team also needs the time limited referral code, an authorized account and a documented access reason.</span></div>
@@ -138,5 +144,5 @@
     <section id="about" class="view"><div class="card prose"><div class="about-company"><img src="/static/ek-synergy.jpeg" alt="EK Synergy Ltd — Driving Innovation Forward"><div><span class="eyebrow">AN EK SYNERGY LTD INNOVATION</span><h2>Public health intelligence designed for field realities</h2><p class="company-motto">Driving Innovation Forward</p></div></div><p>HealthSignal is a Ghana focused screening and surveillance platform created by Ebenezer Kwaw. It combines structured field capture, transparent decision support and aggregate public health signals.</p><div class="notice"><b>Clinical safety notice</b><p>This development version supports screening and surveillance. It does not diagnose disease or replace clinical judgement, diagnostic testing or approved Ghana Health Service protocols.</p></div></div></section>
   </main>
   <div id="reviewModal" class="review-modal hidden" role="dialog" aria-modal="true" aria-labelledby="reviewModalTitle"><div class="review-dialog"><button id="closeReview" class="modal-close" type="button" aria-label="Close">×</button><div id="reviewDetail"></div></div></div>
-  <div id="toast" role="status"></div><script src="/static/app.js?v=20260921-1"></script>
+  <div id="toast" role="status"></div><script src="/static/app.js?v=20260922-1"></script>
 </body></html>

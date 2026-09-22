@@ -3,9 +3,10 @@ import json
 import math
 import secrets
 import uuid
+import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
@@ -21,6 +22,7 @@ from .database import (
     WardAdmission,
     AncVisit,
     InventoryItem,
+    InsuranceClaim,
     RevenueTransaction,
     NetworkReferral,
     NetworkReferralEvent,
@@ -32,7 +34,7 @@ from .database import (
 
 router = APIRouter(prefix="/api/v1/care-network", tags=["Care Network"])
 
-CARE_ROLES = {"administrator", "clinician", "nutritionist_dietitian", "opd_nurse", "records_officer", "laboratory_officer", "pharmacist", "ward_nurse", "midwife", "theatre_staff", "stores_officer", "revenue_officer", "accountant"}
+CARE_ROLES = {"administrator", "clinician", "nutritionist_dietitian", "opd_nurse", "records_officer", "laboratory_officer", "pharmacist", "ward_nurse", "midwife", "theatre_staff", "stores_officer", "revenue_officer", "accountant", "insurance_officer"}
 CLINICAL_ROLES = {"administrator", "clinician", "nutritionist_dietitian"}
 REFERRAL_STATES = {"sent", "accepted", "arrived", "in_care", "completed", "redirected"}
 WARDS = {"Female Ward", "Male Ward", "Children's Ward", "Emergency", "Maternity Ward", "Male Surgical Ward", "Female Surgical Ward", "Theatre", "ICU", "NICU"}
@@ -108,6 +110,36 @@ def episode_json(row):
         "created_by": row.created_by,
         "created_at": row.created_at.isoformat(),
     }
+
+
+def claim_snapshot(db, claim):
+    episode = db.scalar(select(CareEpisode).where(CareEpisode.episode_id == claim.episode_id))
+    events = db.scalars(select(CareEvent).where(CareEvent.episode_id == claim.episode_id).order_by(CareEvent.created_at)).all()
+    tests = db.scalars(select(LaboratoryTest).where(LaboratoryTest.encounter_id == claim.episode_id)).all()
+    medicines = db.scalars(select(MedicationOrder).where(MedicationOrder.episode_id == claim.episode_id)).all()
+    admission = db.scalar(select(WardAdmission).where(WardAdmission.episode_id == claim.episode_id).order_by(WardAdmission.admitted_at.desc()))
+    manual = json.loads(claim.manual_entries_json or "[]")
+    service_types = ["Outpatient"]
+    if admission: service_types.append("Inpatient")
+    if tests: service_types.append("Diagnostic")
+    if medicines: service_types.append("Pharmacy")
+    diagnoses = [{"description": e.summary, "source": "Consulting Room"} for e in events if e.event_type == "consultation"]
+    procedures = [{"description": e.summary, "source": e.department} for e in events if e.event_type in {"ward_admission", "ward_discharge", "procedure", "theatre_procedure"}]
+    investigations = [{"description": t.test_name, "result": t.result, "unit": t.result_unit or "", "source": "Laboratory"} for t in tests]
+    medication_entries = [{"description": m.medicine, "instructions": m.instructions, "status": m.status, "source": "Pharmacy"} for m in medicines]
+    for entry in manual:
+        {"procedure": procedures, "diagnosis": diagnoses, "investigation": investigations, "medicine": medication_entries}.get(entry.get("type"), []).append(entry)
+    dates = sorted({e.created_at.date().isoformat() for e in events})[:4]
+    return {"claim_id": claim.claim_id, "episode_id": claim.episode_id, "patient_code": claim.patient_code, "facility": claim.facility, "member_number": claim.member_number, "ccc_number": claim.ccc_number, "surname": claim.surname, "other_names": claim.other_names, "gender": claim.gender, "date_of_birth": claim.date_of_birth, "folder_number": claim.folder_number, "visit_date": episode.visit_date if episode else None, "visit_type": episode.visit_type if episode else None, "service_types": service_types, "attendance_type": claim.attendance_type, "service_outcome": claim.service_outcome, "specialty": claim.specialty, "service_dates": dates, "referring_facility": claim.referring_facility, "referral_code": claim.referral_code, "physician_name_id": claim.physician_name_id, "pre_authorization_codes": claim.pre_authorization_codes, "principal_gdrg": claim.principal_gdrg, "procedures": procedures, "diagnoses": diagnoses, "investigations": investigations, "medicines": medication_entries, "status": claim.status, "validation_errors": json.loads(claim.validation_json or "[]"), "updated_at": claim.updated_at.isoformat()}
+
+
+def validate_claim(snapshot):
+    errors=[]
+    for field, label in (("member_number","Member/HIN number"),("ccc_number","CCC number"),("surname","Surname"),("gender","Gender"),("physician_name_id","Physician name/ID")):
+        if not snapshot.get(field): errors.append(f"{label} is required")
+    if not snapshot.get("diagnoses"): errors.append("At least one diagnosis is required")
+    if not snapshot.get("service_types"): errors.append("At least one service type is required")
+    return errors
 
 
 def referral_json(row, include_summary=False):
@@ -312,9 +344,21 @@ def register_episode(payload: dict, user: User = Depends(care_allow("administrat
         chief_complaint=clean(payload.get("chief_complaint")), assigned_department="OPD", created_by=user.username,
     )
     db.add(episode)
+    member_number = clean(payload.get("insurance_number"), 80)
+    if member_number:
+        claim = InsuranceClaim(
+            claim_id=str(uuid.uuid4()), episode_id=episode.episode_id, patient_code=patient_code,
+            facility=facility, member_number=member_number, ccc_number=clean(payload.get("ccc_number"), 80) or None,
+            surname=clean(payload.get("surname"), 120), other_names=clean(payload.get("other_names"), 180),
+            gender=clean(payload.get("sex"), 20) or "Not recorded", date_of_birth=clean(payload.get("date_of_birth"), 10) or None,
+            folder_number=clean(payload.get("folder_number"), 80) or None,
+            attendance_type=clean(payload.get("attendance_type"), 40) or "Emergency/Acute Episode", created_by=user.username,
+        )
+        db.add(claim)
     db.add(CareEvent(event_id=str(uuid.uuid4()), episode_id=episode.episode_id, patient_code=patient_code, facility=facility, department="Records", event_type="registered", summary="Patient registered for care", clinical_data_json="{}", created_by=user.username))
     audit(db, user, "care_episode_registered", "care_episode", episode.episode_id, facility); db.commit()
-    return episode_json(episode)
+    result=episode_json(episode);result["insurance_claim_created"]=bool(member_number)
+    return result
 
 
 @router.get("/episodes")
@@ -478,6 +522,75 @@ def finance_summary(user:User=Depends(care_allow("administrator","accountant")),
     rows=db.scalars(select(RevenueTransaction).where(RevenueTransaction.facility==facility_for(user),RevenueTransaction.status=="paid")).all();by_method={}
     for r in rows: by_method[r.payment_method]=round(by_method.get(r.payment_method,0)+r.amount,2)
     return {"transaction_count":len(rows),"total_revenue":round(sum(r.amount for r in rows),2),"by_payment_method":[{"method":k,"amount":v} for k,v in sorted(by_method.items())]}
+
+
+@router.get("/insurance/claims")
+def list_insurance_claims(user:User=Depends(care_allow("administrator","records_officer","insurance_officer","accountant")),db:Session=Depends(get_db)):
+    rows=db.scalars(select(InsuranceClaim).where(InsuranceClaim.facility==facility_for(user)).order_by(InsuranceClaim.created_at.desc()).limit(300)).all()
+    return [{"claim_id":r.claim_id,"episode_id":r.episode_id,"patient_code":r.patient_code,"member_number":r.member_number,"ccc_number":r.ccc_number,"status":r.status,"created_at":r.created_at.isoformat(),"updated_at":r.updated_at.isoformat()} for r in rows]
+
+
+@router.get("/insurance/claims/{claim_id}")
+def get_insurance_claim(claim_id:str,user:User=Depends(care_allow("administrator","records_officer","insurance_officer","accountant")),db:Session=Depends(get_db)):
+    row=db.scalar(select(InsuranceClaim).where(InsuranceClaim.claim_id==claim_id))
+    if not row: raise HTTPException(404,"Insurance claim not found")
+    if user.role!="administrator" and row.facility.casefold()!=facility_for(user).casefold(): raise HTTPException(403,"This claim belongs to another facility")
+    audit(db,user,"insurance_claim_viewed","insurance_claim",claim_id);db.commit();return claim_snapshot(db,row)
+
+
+@router.patch("/insurance/claims/{claim_id}")
+def update_insurance_claim(claim_id:str,payload:dict,user:User=Depends(care_allow("administrator","insurance_officer")),db:Session=Depends(get_db)):
+    row=db.scalar(select(InsuranceClaim).where(InsuranceClaim.claim_id==claim_id))
+    if not row: raise HTTPException(404,"Insurance claim not found")
+    if user.role!="administrator" and row.facility.casefold()!=facility_for(user).casefold(): raise HTTPException(403,"This claim belongs to another facility")
+    fields={"member_number":80,"ccc_number":80,"surname":120,"other_names":180,"gender":20,"date_of_birth":10,"folder_number":80,"attendance_type":40,"specialty":20,"service_outcome":40,"referring_facility":160,"referral_code":80,"physician_name_id":160,"pre_authorization_codes":500,"principal_gdrg":80}
+    for field,limit in fields.items():
+        if field in payload: setattr(row,field,clean(payload.get(field),limit) or None)
+    if "manual_entries" in payload:
+        entries=payload.get("manual_entries")
+        if not isinstance(entries,list) or len(entries)>100: raise HTTPException(422,"Manual claim entries must be a list of no more than 100 items")
+        allowed={"procedure","diagnosis","investigation","medicine"};normalized=[]
+        for entry in entries:
+            if not isinstance(entry,dict) or entry.get("type") not in allowed or len(clean(entry.get("description"),300))<2: raise HTTPException(422,"Each claim entry requires a valid type and description")
+            normalized.append({"type":entry["type"],"code":clean(entry.get("code"),80),"description":clean(entry.get("description"),300),"quantity":entry.get("quantity"),"unit_cost":entry.get("unit_cost"),"source":"Insurance desk"})
+        row.manual_entries_json=json.dumps(normalized)
+    row.status="draft";row.validation_json="[]";row.updated_at=datetime.utcnow();audit(db,user,"insurance_claim_updated","insurance_claim",claim_id);db.commit();return claim_snapshot(db,row)
+
+
+@router.post("/insurance/claims/{claim_id}/validate")
+def validate_insurance_claim(claim_id:str,user:User=Depends(care_allow("administrator","insurance_officer")),db:Session=Depends(get_db)):
+    row=db.scalar(select(InsuranceClaim).where(InsuranceClaim.claim_id==claim_id))
+    if not row: raise HTTPException(404,"Insurance claim not found")
+    if user.role!="administrator" and row.facility.casefold()!=facility_for(user).casefold(): raise HTTPException(403,"This claim belongs to another facility")
+    snapshot=claim_snapshot(db,row);errors=validate_claim(snapshot);row.validation_json=json.dumps(errors);row.status="needs_correction" if errors else "ready_for_export";row.reviewed_by=user.username;row.updated_at=datetime.utcnow();audit(db,user,"insurance_claim_validated","insurance_claim",claim_id,f"errors={len(errors)}");db.commit();return {"claim_id":claim_id,"status":row.status,"errors":errors}
+
+
+@router.get("/insurance/claims/{claim_id}/xml")
+def export_insurance_claim_xml(claim_id:str,user:User=Depends(care_allow("administrator","insurance_officer")),db:Session=Depends(get_db)):
+    row=db.scalar(select(InsuranceClaim).where(InsuranceClaim.claim_id==claim_id))
+    if not row: raise HTTPException(404,"Insurance claim not found")
+    if user.role!="administrator" and row.facility.casefold()!=facility_for(user).casefold(): raise HTTPException(403,"This claim belongs to another facility")
+    snapshot=claim_snapshot(db,row);errors=validate_claim(snapshot)
+    if errors: raise HTTPException(422,"Validate and correct the claim before XML export: "+"; ".join(errors))
+    root=ET.Element("HealthSignalNHISClaim",{"interface":"NHIA-standardized-eclaims","schemaStatus":"MVP-pending-NHIA-certification"})
+    def add(parent,name,value): ET.SubElement(parent,name).text=str(value or "")
+    provider=ET.SubElement(root,"Provider");add(provider,"FacilityName",snapshot["facility"])
+    member=ET.SubElement(root,"MemberDetails")
+    for tag,key in (("MemberNoHIN","member_number"),("CCCNo","ccc_number"),("Surname","surname"),("OtherNames","other_names"),("Gender","gender"),("DateOfBirth","date_of_birth"),("FolderNo","folder_number")): add(member,tag,snapshot.get(key))
+    service=ET.SubElement(root,"Service");add(service,"VisitDate",snapshot.get("visit_date"));add(service,"AttendanceType",snapshot.get("attendance_type"));add(service,"Outcome",snapshot.get("service_outcome"));add(service,"Specialty",snapshot.get("specialty"));add(service,"PrincipalGDRG",snapshot.get("principal_gdrg"))
+    types=ET.SubElement(service,"ServiceTypes")
+    for value in snapshot["service_types"]: add(types,"Type",value)
+    dates=ET.SubElement(service,"DatesOfService")
+    for value in snapshot["service_dates"]: add(dates,"Date",value)
+    referral=ET.SubElement(root,"ReferralInfo");add(referral,"ReferringFacility",snapshot.get("referring_facility"));add(referral,"ReferralCodeCCC",snapshot.get("referral_code"))
+    authorization=ET.SubElement(root,"AuthorizationCodes");add(authorization,"PhysicianNameID",snapshot.get("physician_name_id"));add(authorization,"PreAuthorizationCodes",snapshot.get("pre_authorization_codes"))
+    for section,key in (("Procedures","procedures"),("Diagnoses","diagnoses"),("Investigations","investigations"),("Medicines","medicines")):
+        parent=ET.SubElement(root,section)
+        for item in snapshot[key]:
+            entry=ET.SubElement(parent,section[:-1] if section.endswith("s") else "Entry")
+            for field,value in item.items(): add(entry,field.replace("_","").title(),value)
+    ET.indent(root);content=ET.tostring(root,encoding="utf-8",xml_declaration=True);audit(db,user,"insurance_claim_xml_exported","insurance_claim",claim_id,"Pending official NHIA schema certification");db.commit()
+    return Response(content=content,media_type="application/xml",headers={"Content-Disposition":f'attachment; filename="healthsignal-claim-{claim_id[:8]}.xml"'})
 
 
 @router.post("/referrals", status_code=201)

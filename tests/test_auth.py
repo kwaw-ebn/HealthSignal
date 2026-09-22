@@ -207,3 +207,28 @@ def test_department_accounts_have_separate_least_privilege_workspaces():
         order_id=queue.json()[0]["order_id"]
         assert client.patch(f"/api/v1/care-network/medications/{order_id}/dispense",headers=pharmacy).status_code==200
         assert client.get("/api/v1/care-network/medications",headers=opd).status_code==403
+
+def test_insurance_claim_is_created_from_records_and_collects_services_for_xml():
+    with TestClient(app) as client:
+        admin=admin_headers(client)
+        client.put("/api/v1/care-network/security/config",headers=admin,json={"facility":"HealthSignal Demonstration Hospital","latitude":5.6037,"longitude":-0.1870,"allowed_radius_m":250,"geofence_enabled":False})
+        insurance=approved_role_headers(client,admin,"insurance_officer","201")
+        episode=client.post("/api/v1/care-network/episodes",headers=admin,json={"age":36,"sex":"Female","community":"Duakwa","chief_complaint":"Review","insurance_number":"NHIS-TEST-001","ccc_number":"CCC-001","surname":"Mensah","other_names":"Ama","date_of_birth":"1990-01-10","folder_number":"F-100","attendance_type":"Emergency/Acute Episode"})
+        assert episode.status_code==201 and episode.json()["insurance_claim_created"] is True
+        episode_id=episode.json()["episode_id"]
+        assert client.post(f"/api/v1/care-network/episodes/{episode_id}/consultation",headers=admin,json={"assessment":"Clinical assessment for insurance test","plan":"Laboratory and medication","disposition":"Laboratory"}).status_code==201
+        assert client.post(f"/api/v1/care-network/episodes/{episode_id}/laboratory",headers=admin,json={"test_name":"Full blood count","result":"Reviewed"}).status_code==201
+        assert client.post(f"/api/v1/care-network/episodes/{episode_id}/medications",headers=admin,json={"medicine":"Test medicine","instructions":"Use as directed"}).status_code==201
+        claims=client.get("/api/v1/care-network/insurance/claims",headers=insurance)
+        assert claims.status_code==200
+        claim=next(x for x in claims.json() if x["episode_id"]==episode_id)
+        detail=client.get(f"/api/v1/care-network/insurance/claims/{claim['claim_id']}",headers=insurance).json()
+        assert detail["diagnoses"] and detail["investigations"] and detail["medicines"]
+        assert client.post("/api/v1/care-network/episodes",headers=insurance,json={"age":20,"sex":"Male","chief_complaint":"Denied"}).status_code==403
+        updated=client.patch(f"/api/v1/care-network/insurance/claims/{claim['claim_id']}",headers=insurance,json={"physician_name_id":"DR-001","service_outcome":"Discharged","specialty":"OPDC","principal_gdrg":"MVP-TEST","manual_entries":[{"type":"procedure","code":"PROC-01","description":"Clinical procedure","quantity":1,"unit_cost":20}]})
+        assert updated.status_code==200
+        validated=client.post(f"/api/v1/care-network/insurance/claims/{claim['claim_id']}/validate",headers=insurance)
+        assert validated.status_code==200 and validated.json()["status"]=="ready_for_export"
+        exported=client.get(f"/api/v1/care-network/insurance/claims/{claim['claim_id']}/xml",headers=insurance)
+        assert exported.status_code==200 and exported.headers["content-type"].startswith("application/xml")
+        assert b"NHIA-standardized-eclaims" in exported.content and b"NHIS-TEST-001" in exported.content
